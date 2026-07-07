@@ -35,6 +35,129 @@ void test_invalid_code() {
     require(threw, "labels that do not appear twice should be rejected");
 }
 
+void test_common_knot_components() {
+    const auto trefoil = pdcode_simplify::parse_pd_code(
+        "[(1,5,2,4),(3,1,4,6),(5,3,6,2)]");
+    const auto figure_eight = pdcode_simplify::parse_pd_code(
+        "[(8,3,1,4),(2,6,3,5),(6,2,7,1),(4,7,5,8)]");
+
+    const auto trefoil_components = pdcode_simplify::analyze_components(trefoil);
+    const auto figure_eight_components = pdcode_simplify::analyze_components(figure_eight);
+
+    require(trefoil_components.total_components() == 1, "trefoil should have one component");
+    require(figure_eight_components.total_components() == 1, "figure-eight knot should have one component");
+
+    pdcode_simplify::SimplifierOptions options;
+    options.max_paths = 100;
+    (void)pdcode_simplify::find_simplification(trefoil, options);
+    (void)pdcode_simplify::find_simplification(figure_eight, options);
+}
+
+void test_link_components() {
+    const auto two_component_link = pdcode_simplify::parse_pd_code(
+        "[(4,0,5,3),(0,6,1,5),(6,2,7,1),(2,4,3,7)]");
+    const auto components = pdcode_simplify::analyze_components(two_component_link);
+
+    require(components.total_components() == 2, "sample link should have two components");
+    require(components.components_with_crossings() == 2, "both sample link components should have crossings");
+}
+
+void test_crossingless_component_count_after_removal() {
+    const auto trefoil = pdcode_simplify::parse_pd_code(
+        "[(1,5,2,4),(3,1,4,6),(5,3,6,2)]");
+    const auto removed_trefoil = pdcode_simplify::analyze_components_after_removing_crossings(
+        trefoil, {0, 1, 2});
+
+    require(removed_trefoil.components_with_crossings() == 0,
+            "removing all trefoil crossings should leave no crossing-bearing components");
+    require(removed_trefoil.crossingless_components == 1,
+            "removing all trefoil crossings should preserve one crossingless component");
+    require(removed_trefoil.total_components() == 1,
+            "removal should preserve the total component count");
+
+    const auto two_component_link = pdcode_simplify::parse_pd_code(
+        "[(4,0,5,3),(0,6,1,5),(6,2,7,1),(2,4,3,7)]");
+    const auto original = pdcode_simplify::analyze_components(two_component_link);
+    require(original.total_components() == 2, "sample link should start with two components");
+
+    const auto removed_one_component = pdcode_simplify::analyze_components_after_removing_crossings(
+        two_component_link, original.components.front().crossing_indices);
+    require(removed_one_component.components_with_crossings() == 0,
+            "shared inter-component crossings can make both components crossingless");
+    require(removed_one_component.crossingless_components == 2,
+            "all components that lose crossings should be counted as crossingless");
+    require(removed_one_component.total_components() == 2,
+            "component metadata should not be lost during deletion simulation");
+
+    const auto empty_unknot = pdcode_simplify::analyze_components({}, 1);
+    require(empty_unknot.components_with_crossings() == 0,
+            "an explicitly tracked empty unknot has no crossing-bearing component");
+    require(empty_unknot.crossingless_components == 1,
+            "an explicitly tracked empty unknot should be counted");
+
+    const auto kink = pdcode_simplify::parse_pd_code("[(0,0,1,1)]");
+    const auto simplified_kink = pdcode_simplify::simplify_reidemeister_i_ii(kink);
+    require(simplified_kink.code.empty(),
+            "a one-crossing kink should simplify to an empty PD code");
+    require(simplified_kink.crossingless_components == 1,
+            "a removed one-crossing kink should leave one crossingless component");
+}
+
+void test_reidemeister_random_inflate_then_simplify() {
+    struct Sample {
+        const char* name;
+        const char* pd;
+        std::size_t minimal_crossings;
+    };
+
+    const Sample samples[] = {
+        {
+            "trefoil",
+            "[(1,5,2,4),(3,1,4,6),(5,3,6,2)]",
+            3,
+        },
+        {
+            "figure-eight",
+            "[(8,3,1,4),(2,6,3,5),(6,2,7,1),(4,7,5,8)]",
+            4,
+        },
+        {
+            "cinquefoil",
+            "[(8,0,1,9),(0,2,3,1),(2,4,5,3),(4,6,7,5),(6,8,9,7)]",
+            5,
+        },
+    };
+
+    for (const Sample& sample : samples) {
+        const auto base = pdcode_simplify::parse_pd_code(sample.pd);
+        require(base.size() == sample.minimal_crossings,
+                std::string(sample.name) + " base crossing count should match the fixture");
+        require(pdcode_simplify::analyze_components(base).total_components() == 1,
+                std::string(sample.name) + " should be a one-component knot fixture");
+
+        for (unsigned int seed = 1; seed <= 8; ++seed) {
+            pdcode_simplify::RandomInflationOptions options;
+            options.moves = 18;
+            options.seed = seed * 97U + static_cast<unsigned int>(sample.minimal_crossings);
+            options.type_ii_percentage = 60;
+
+            const auto inflated = pdcode_simplify::randomly_increase_crossings(base, options);
+            require(inflated.code.size() > base.size(),
+                    std::string(sample.name) + " should gain crossings during random inflation");
+            require(pdcode_simplify::analyze_components(inflated.code).total_components() == 1,
+                    std::string(sample.name) + " random inflation should preserve the component count");
+
+            const auto simplified = pdcode_simplify::simplify_reidemeister_i_ii(inflated.code);
+            require(simplified.code.size() == base.size(),
+                    std::string(sample.name) + " should simplify back to its original crossing count");
+            require(simplified.crossingless_components == 0,
+                    std::string(sample.name) + " simplification should not invent crossingless components");
+            require(simplified.type_i_moves + simplified.type_ii_moves > 0,
+                    std::string(sample.name) + " should use at least one Reidemeister simplification");
+        }
+    }
+}
+
 void test_reference_sample() {
     const char* sample = R"PD(
 [(15, 7, 16, 6),
@@ -85,6 +208,10 @@ int main() {
         test_parser();
         test_empty_code();
         test_invalid_code();
+        test_common_knot_components();
+        test_link_components();
+        test_crossingless_component_count_after_removal();
+        test_reidemeister_random_inflate_then_simplify();
         test_reference_sample();
         std::cout << "All tests passed\n";
         return EXIT_SUCCESS;

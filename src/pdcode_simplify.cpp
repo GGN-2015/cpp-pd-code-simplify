@@ -6,6 +6,7 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <random>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -30,6 +31,16 @@ Endpoint endpoint_from_key(int key) {
     return Endpoint{key / 4, key % 4};
 }
 
+int max_label(const PDCode& code) {
+    int result = -1;
+    for (const Crossing& crossing : code) {
+        for (int label : crossing) {
+            result = std::max(result, label);
+        }
+    }
+    return result;
+}
+
 long long face_pair_key(int a, int b) {
     if (a > b) {
         std::swap(a, b);
@@ -42,6 +53,124 @@ struct CrossingState {
     bool directions[4][4]{};
     int sign = 0;
 };
+
+using LabelMap = std::unordered_map<int, std::vector<Endpoint>>;
+
+LabelMap build_label_map(const PDCode& code) {
+    LabelMap labels;
+    for (int c = 0; c < static_cast<int>(code.size()); ++c) {
+        for (int i = 0; i < 4; ++i) {
+            labels[code[c][i]].push_back(Endpoint{c, i});
+        }
+    }
+    for (const auto& item : labels) {
+        if (item.second.size() != 2) {
+            std::ostringstream message;
+            message << "PD label " << item.first << " appears " << item.second.size()
+                    << " times; each label must appear exactly twice";
+            throw std::invalid_argument(message.str());
+        }
+    }
+    return labels;
+}
+
+Endpoint mate_endpoint(const PDCode& code, const LabelMap& labels, const Endpoint& endpoint) {
+    const int label = code.at(endpoint.crossing).at(endpoint.strand);
+    const std::vector<Endpoint>& endpoints = labels.at(label);
+    if (endpoints[0] == endpoint) {
+        return endpoints[1];
+    }
+    if (endpoints[1] == endpoint) {
+        return endpoints[0];
+    }
+    throw std::logic_error("Endpoint is not present in its label map entry");
+}
+
+void replace_label(PDCode& code, int old_label, int new_label) {
+    if (old_label == new_label) {
+        return;
+    }
+    for (Crossing& crossing : code) {
+        for (int& label : crossing) {
+            if (label == old_label) {
+                label = new_label;
+            }
+        }
+    }
+}
+
+void erase_crossings(PDCode& code, int first, int second = -1) {
+    if (second >= 0 && first > second) {
+        std::swap(first, second);
+    }
+    if (second >= 0) {
+        code.erase(code.begin() + second);
+    }
+    code.erase(code.begin() + first);
+}
+
+int label_occurrences_outside(const PDCode& code, int label, const std::set<int>& removed_crossings) {
+    int count = 0;
+    for (int crossing_index = 0; crossing_index < static_cast<int>(code.size()); ++crossing_index) {
+        if (removed_crossings.count(crossing_index) != 0) {
+            continue;
+        }
+        for (int strand = 0; strand < 4; ++strand) {
+            if (code[crossing_index][strand] == label) {
+                ++count;
+            }
+        }
+    }
+    return count;
+}
+
+std::vector<std::vector<int>> raw_faces_from_pd_code(const PDCode& code) {
+    const LabelMap labels = build_label_map(code);
+    const int endpoint_count = static_cast<int>(code.size() * 4);
+    std::vector<char> present(endpoint_count, true);
+    int remaining = endpoint_count;
+    std::vector<std::vector<int>> faces;
+
+    while (remaining > 0) {
+        int first_key = -1;
+        for (int key = endpoint_count - 1; key >= 0; --key) {
+            if (present[key]) {
+                first_key = key;
+                break;
+            }
+        }
+        if (first_key < 0) {
+            break;
+        }
+
+        std::vector<int> face;
+        Endpoint first = endpoint_from_key(first_key);
+        Endpoint current = first;
+        present[first_key] = false;
+        --remaining;
+        face.push_back(first_key);
+
+        while (true) {
+            const Endpoint next_corner{
+                current.crossing,
+                (current.strand + 1) % 4};
+            const Endpoint next = mate_endpoint(code, labels, next_corner);
+            if (next == first) {
+                faces.push_back(std::move(face));
+                break;
+            }
+            const int next_key = endpoint_key(next);
+            if (present[next_key]) {
+                present[next_key] = false;
+                --remaining;
+            }
+            face.push_back(next_key);
+            current = next;
+        }
+    }
+
+    return faces;
+}
 
 struct Diagram {
     PDCode code;
@@ -470,6 +599,49 @@ std::vector<std::vector<Endpoint>> possible_red_lines(const Diagram& diagram) {
     return candidates;
 }
 
+std::vector<LinkComponentSummary> component_summaries(const Diagram& diagram) {
+    std::set<int> remaining_entries;
+    const std::vector<Endpoint> entries = diagram.crossing_entries();
+    for (const Endpoint& endpoint : entries) {
+        remaining_entries.insert(endpoint_key(endpoint));
+    }
+
+    std::vector<LinkComponentSummary> summaries;
+    while (!remaining_entries.empty()) {
+        Endpoint start = endpoint_from_key(*remaining_entries.rbegin());
+        Endpoint current = start;
+        std::set<int> crossing_set;
+
+        while (true) {
+            remaining_entries.erase(endpoint_key(current));
+            crossing_set.insert(current.crossing);
+            current = diagram.next(current);
+            if (current == start) {
+                break;
+            }
+        }
+
+        LinkComponentSummary summary;
+        summary.crossing_indices.assign(crossing_set.begin(), crossing_set.end());
+        summaries.push_back(std::move(summary));
+    }
+
+    return summaries;
+}
+
+std::set<int> normalized_removed_crossings(const PDCode& code, const std::vector<int>& removed_crossings) {
+    std::set<int> removed;
+    for (int crossing : removed_crossings) {
+        if (crossing < 0 || crossing >= static_cast<int>(code.size())) {
+            std::ostringstream message;
+            message << "Removed crossing index " << crossing << " is out of range";
+            throw std::invalid_argument(message.str());
+        }
+        removed.insert(crossing);
+    }
+    return removed;
+}
+
 void reset_weights(DualGraph& graph) {
     for (auto& edge : graph.edges) {
         edge.weight = 1;
@@ -781,6 +953,297 @@ std::string format_endpoint(const Endpoint& endpoint) {
 
 std::string format_direction(Direction direction) {
     return direction == Direction::Left ? "left" : "right";
+}
+
+ComponentAnalysis analyze_components(
+    const PDCode& code,
+    std::size_t known_crossingless_components) {
+    ComponentAnalysis analysis;
+    analysis.crossingless_components = known_crossingless_components;
+    if (code.empty()) {
+        return analysis;
+    }
+
+    Diagram diagram(code);
+    analysis.components = component_summaries(diagram);
+    return analysis;
+}
+
+ComponentAnalysis analyze_components_after_removing_crossings(
+    const PDCode& code,
+    const std::vector<int>& removed_crossings,
+    std::size_t known_crossingless_components) {
+    const std::set<int> removed = normalized_removed_crossings(code, removed_crossings);
+    ComponentAnalysis original = analyze_components(code, known_crossingless_components);
+    ComponentAnalysis reduced;
+    reduced.crossingless_components = original.crossingless_components;
+
+    for (const LinkComponentSummary& component : original.components) {
+        LinkComponentSummary remaining_component;
+        for (int crossing : component.crossing_indices) {
+            if (removed.count(crossing) == 0) {
+                remaining_component.crossing_indices.push_back(crossing);
+            }
+        }
+
+        if (remaining_component.crossing_indices.empty()) {
+            ++reduced.crossingless_components;
+        } else {
+            reduced.components.push_back(std::move(remaining_component));
+        }
+    }
+
+    return reduced;
+}
+
+std::size_t count_crossingless_components_after_removing_crossings(
+    const PDCode& code,
+    const std::vector<int>& removed_crossings,
+    std::size_t known_crossingless_components) {
+    return analyze_components_after_removing_crossings(
+        code, removed_crossings, known_crossingless_components).crossingless_components;
+}
+
+bool apply_reverse_type_i(PDCode& code, std::mt19937& rng) {
+    if (code.empty()) {
+        return false;
+    }
+
+    const LabelMap labels = build_label_map(code);
+    std::uniform_int_distribution<int> endpoint_distribution(
+        0, static_cast<int>(code.size() * 4 - 1));
+    const Endpoint first = endpoint_from_key(endpoint_distribution(rng));
+    const Endpoint second = mate_endpoint(code, labels, first);
+
+    const int first_label = max_label(code) + 1;
+    const int second_label = first_label + 1;
+    const int loop_label = first_label + 2;
+
+    std::uniform_int_distribution<int> hand_distribution(0, 1);
+    code[first.crossing][first.strand] = first_label;
+    code[second.crossing][second.strand] = second_label;
+    if (hand_distribution(rng) == 0) {
+        code.push_back(Crossing{first_label, loop_label, loop_label, second_label});
+    } else {
+        code.push_back(Crossing{first_label, second_label, loop_label, loop_label});
+    }
+    return true;
+}
+
+bool apply_reverse_type_ii(PDCode& code, std::mt19937& rng) {
+    if (code.empty()) {
+        return false;
+    }
+
+    const LabelMap labels = build_label_map(code);
+    const std::vector<std::vector<int>> faces = raw_faces_from_pd_code(code);
+    std::vector<int> eligible_faces;
+    for (int i = 0; i < static_cast<int>(faces.size()); ++i) {
+        if (faces[i].size() > 1) {
+            eligible_faces.push_back(i);
+        }
+    }
+    if (eligible_faces.empty()) {
+        return false;
+    }
+
+    std::uniform_int_distribution<int> face_distribution(0, static_cast<int>(eligible_faces.size() - 1));
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        const std::vector<int>& face = faces[eligible_faces[face_distribution(rng)]];
+        std::uniform_int_distribution<int> corner_distribution(0, static_cast<int>(face.size() - 1));
+        const int first_corner = corner_distribution(rng);
+        int second_corner = corner_distribution(rng);
+        if (first_corner == second_corner) {
+            second_corner = (second_corner + 1) % static_cast<int>(face.size());
+        }
+
+        const Endpoint c = endpoint_from_key(face[first_corner]);
+        const Endpoint d = endpoint_from_key(face[second_corner]);
+        const Endpoint c_opposite = mate_endpoint(code, labels, c);
+        const Endpoint d_opposite = mate_endpoint(code, labels, d);
+
+        const std::set<int> touched{
+            endpoint_key(c),
+            endpoint_key(c_opposite),
+            endpoint_key(d),
+            endpoint_key(d_opposite)};
+        if (touched.size() != 4) {
+            continue;
+        }
+
+        const int base = max_label(code) + 1;
+        const int d_opposite_label = base;
+        const int c_label = base + 1;
+        const int shared_first = base + 2;
+        const int shared_second = base + 3;
+        const int c_opposite_label = base + 4;
+        const int d_label = base + 5;
+
+        code[d_opposite.crossing][d_opposite.strand] = d_opposite_label;
+        code[c.crossing][c.strand] = c_label;
+        code[c_opposite.crossing][c_opposite.strand] = c_opposite_label;
+        code[d.crossing][d.strand] = d_label;
+
+        code.push_back(Crossing{d_opposite_label, c_label, shared_first, shared_second});
+        code.push_back(Crossing{shared_first, c_opposite_label, d_label, shared_second});
+        return true;
+    }
+
+    return false;
+}
+
+bool apply_type_i_simplification(
+    PDCode& code,
+    std::size_t& crossingless_components,
+    int& type_i_moves) {
+    for (int crossing_index = 0; crossing_index < static_cast<int>(code.size()); ++crossing_index) {
+        const Crossing crossing = code[crossing_index];
+        for (int i = 0; i < 4; ++i) {
+            if (crossing[i] != crossing[(i + 1) % 4]) {
+                continue;
+            }
+
+            const ComponentAnalysis after_removal =
+                analyze_components_after_removing_crossings(
+                    code, std::vector<int>{crossing_index}, crossingless_components);
+            const int keep_label = crossing[(i + 2) % 4];
+            const int merge_label = crossing[(i + 3) % 4];
+            const std::set<int> removed{crossing_index};
+            if (keep_label == merge_label) {
+                if (label_occurrences_outside(code, keep_label, removed) != 0) {
+                    continue;
+                }
+            } else if (label_occurrences_outside(code, keep_label, removed) != 1 ||
+                       label_occurrences_outside(code, merge_label, removed) != 1) {
+                continue;
+            }
+
+            crossingless_components = after_removal.crossingless_components;
+            erase_crossings(code, crossing_index);
+            replace_label(code, merge_label, keep_label);
+            ++type_i_moves;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool apply_type_ii_simplification(
+    PDCode& code,
+    std::size_t& crossingless_components,
+    int& type_ii_moves) {
+    if (code.size() < 2) {
+        return false;
+    }
+
+    const LabelMap labels = build_label_map(code);
+    for (int first_crossing = 0; first_crossing < static_cast<int>(code.size()); ++first_crossing) {
+        for (int a = 0; a < 4; ++a) {
+            const Endpoint first_mate =
+                mate_endpoint(code, labels, Endpoint{first_crossing, a});
+            const Endpoint second_mate =
+                mate_endpoint(code, labels, Endpoint{first_crossing, (a + 1) % 4});
+            const int second_crossing = first_mate.crossing;
+            if (second_crossing == first_crossing || second_crossing != second_mate.crossing) {
+                continue;
+            }
+
+            const int b = first_mate.strand;
+            const int c = second_mate.strand;
+            if (positive_mod(b - 1, 4) != c || (a + b) % 2 != 0) {
+                continue;
+            }
+
+            const Crossing first = code[first_crossing];
+            const Crossing second = code[second_crossing];
+            const int keep_first = first[(a + 2) % 4];
+            const int merge_first = second[(b + 2) % 4];
+            const int keep_second = first[(a + 3) % 4];
+            const int merge_second = second[(b + 1) % 4];
+            const std::set<int> boundary_labels{
+                keep_first,
+                merge_first,
+                keep_second,
+                merge_second};
+            const std::set<int> removed_crossings{first_crossing, second_crossing};
+            if (boundary_labels.size() != 4 ||
+                label_occurrences_outside(code, keep_first, removed_crossings) != 1 ||
+                label_occurrences_outside(code, merge_first, removed_crossings) != 1 ||
+                label_occurrences_outside(code, keep_second, removed_crossings) != 1 ||
+                label_occurrences_outside(code, merge_second, removed_crossings) != 1) {
+                continue;
+            }
+
+            const ComponentAnalysis after_removal =
+                analyze_components_after_removing_crossings(
+                    code,
+                    std::vector<int>{first_crossing, second_crossing},
+                    crossingless_components);
+            crossingless_components = after_removal.crossingless_components;
+
+            erase_crossings(code, first_crossing, second_crossing);
+            replace_label(code, merge_first, keep_first);
+            replace_label(code, merge_second, keep_second);
+            ++type_ii_moves;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+RandomInflationResult randomly_increase_crossings(
+    const PDCode& code,
+    const RandomInflationOptions& options) {
+    if (options.moves < 0) {
+        throw std::invalid_argument("Random inflation move count cannot be negative");
+    }
+    if (options.type_ii_percentage < 0 || options.type_ii_percentage > 100) {
+        throw std::invalid_argument("Type-II percentage must be between 0 and 100");
+    }
+
+    RandomInflationResult result;
+    result.code = code;
+    result.seed = options.seed;
+    std::mt19937 rng(options.seed);
+    std::uniform_int_distribution<int> percent_distribution(0, 99);
+
+    for (int move = 0; move < options.moves; ++move) {
+        const bool prefer_type_ii = percent_distribution(rng) < options.type_ii_percentage;
+        if (prefer_type_ii && apply_reverse_type_ii(result.code, rng)) {
+            ++result.type_ii_moves;
+        } else if (apply_reverse_type_i(result.code, rng)) {
+            ++result.type_i_moves;
+        } else if (apply_reverse_type_ii(result.code, rng)) {
+            ++result.type_ii_moves;
+        } else {
+            throw std::runtime_error("Could not apply any random crossing-increasing move");
+        }
+    }
+
+    return result;
+}
+
+ReidemeisterSimplificationResult simplify_reidemeister_i_ii(
+    const PDCode& code,
+    std::size_t known_crossingless_components) {
+    ReidemeisterSimplificationResult result;
+    result.code = code;
+    result.crossingless_components = known_crossingless_components;
+
+    while (true) {
+        if (apply_type_i_simplification(
+                result.code, result.crossingless_components, result.type_i_moves)) {
+            continue;
+        }
+        if (apply_type_ii_simplification(
+                result.code, result.crossingless_components, result.type_ii_moves)) {
+            continue;
+        }
+        break;
+    }
+
+    return result;
 }
 
 SimplificationResult find_simplification(
