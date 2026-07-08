@@ -89,7 +89,7 @@ component.
 --max-paths N                  Cap accepted green paths; default -1.
 --ban-heuristic                With --max-paths -1, enumerate all green paths.
 --reduction-round K            Maximum mid-simplification rounds; -1 means until stable.
---verbose                      Print progress logs to stderr.
+--verbose                      Print timestamped progress logs to stderr.
 --known-crossingless-components N
                                Add N components not representable in PD code.
 --remove-crossings LIST        Report component counts after removing crossings.
@@ -106,6 +106,8 @@ mid-simplification witnesses. In heuristic mode, if the heuristic can no
 longer find an applicable path, the executable runs one brute-force
 enumeration pass before declaring the diagram stable. Use
 `--reduction-round K` to cap the number of applied mid-simplification rounds.
+Verbose log lines are prefixed with local wall-clock time in
+`YYYY-MM-DD HH:MM:SS` format.
 
 ## Component Accounting
 

@@ -30,7 +30,8 @@ Use `--json` for structured output containing `final_pd_code` and
 `final_crossings`. Use `--reduction-round K` to cap applied
 mid-simplification rounds; the default `-1` runs until stable, with a
 brute-force check when heuristic mode can no longer find a path. Use
-`--verbose` to print progress logs to stderr.
+`--verbose` to print timestamped progress logs to stderr. Verbose log lines
+use local wall-clock time in `YYYY-MM-DD HH:MM:SS` format.
 
 Report crossingless components after removing all trefoil crossings:
 

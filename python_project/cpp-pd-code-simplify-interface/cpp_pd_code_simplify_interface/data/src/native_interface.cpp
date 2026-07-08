@@ -2,13 +2,33 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
+
+std::string local_timestamp() {
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    std::ostringstream out;
+    out << std::put_time(&local, "%Y-%m-%d %H:%M:%S");
+    return out.str();
+}
+
+void print_progress_log(const std::string& message) {
+    std::cerr << "[pdcode-simplify " << local_timestamp() << "] "
+              << message << '\n';
+}
 
 bool denotes_crossingless_unknot(const std::string& text) {
     std::string compact;
@@ -129,7 +149,7 @@ char* pdcode_simplify_run_json(
         options.ban_heuristic = ban_heuristic != 0;
         options.verbose = verbose != 0;
         options.progress = [](const std::string& message) {
-            std::cerr << "[pdcode-simplify] " << message << '\n';
+            print_progress_log(message);
         };
 
         const pdcode_simplify::PDCode code = pdcode_simplify::parse_pd_code(text);

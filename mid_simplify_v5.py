@@ -17,6 +17,7 @@ import re
 import sys
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -28,6 +29,14 @@ HEURISTIC_MIN_STATE_BUDGET = 128
 HEURISTIC_MAX_STATE_BUDGET = 4096
 HEURISTIC_MIN_PATH_BUDGET = 24
 HEURISTIC_MAX_PATH_BUDGET = 384
+
+
+def local_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_progress_log(message: str) -> str:
+    return f"[pdcode-simplify {local_timestamp()}] {message}"
 
 
 @dataclass(frozen=True, order=True)
@@ -2077,7 +2086,7 @@ def run_job(
             max_thread=max_thread,
             verbose=verbose,
             progress=lambda message: print(
-                f"[pdcode-simplify] {job.label}: {message}", file=sys.stderr
+                format_progress_log(f"{job.label}: {message}"), file=sys.stderr
             ),
         ),
         input_components,

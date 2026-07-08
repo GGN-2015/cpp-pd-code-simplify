@@ -60,7 +60,8 @@ print(result["final_pd_code"])
 sampling in the C++ backend. Pass `ban_heuristic=True` to request exhaustive
 green-path enumeration for the same input. `reduction_round=-1` is the
 default and applies mid-simplification witnesses until stable. Pass
-`verbose=True` to forward C++ progress logs to stderr.
+`verbose=True` to forward timestamped C++ progress logs to stderr. Verbose log
+lines use local wall-clock time in `YYYY-MM-DD HH:MM:SS` format.
 
 Batch use:
 

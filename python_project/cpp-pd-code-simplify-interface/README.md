@@ -36,7 +36,8 @@ The default `max_paths=-1` uses deterministic heuristic green-path sampling in
 the C++ backend. Use `ban_heuristic=True` to request exhaustive green-path
 enumeration for a manageable input. Use `reduction_round=K` to cap applied
 mid-simplification rounds; the default `-1` runs until stable. Use
-`verbose=True` to forward C++ progress logs to stderr.
+`verbose=True` to forward timestamped C++ progress logs to stderr. Verbose log
+lines use local wall-clock time in `YYYY-MM-DD HH:MM:SS` format.
 
 Batch use:
 

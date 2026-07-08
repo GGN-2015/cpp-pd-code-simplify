@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <ctime>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -21,6 +23,24 @@
 #endif
 
 namespace {
+
+std::string local_timestamp() {
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    std::ostringstream out;
+    out << std::put_time(&local, "%Y-%m-%d %H:%M:%S");
+    return out.str();
+}
+
+void print_progress_log(const std::string& message) {
+    std::cerr << "[pdcode-simplify " << local_timestamp() << "] "
+              << message << '\n';
+}
 
 struct PDJob {
     std::string label;
@@ -426,7 +446,7 @@ int main(int argc, char** argv) {
     try {
         pdcode_simplify::SimplifierOptions options;
         options.progress = [](const std::string& message) {
-            std::cerr << "[pdcode-simplify] " << message << '\n';
+            print_progress_log(message);
         };
         bool json = false;
         int reduction_round = -1;
@@ -566,8 +586,7 @@ int main(int argc, char** argv) {
                 if (options.verbose) {
                     const std::string label = jobs[i].label;
                     job_options.progress = [label](const std::string& message) {
-                        std::cerr << "[pdcode-simplify] " << label << ": "
-                                  << message << '\n';
+                        print_progress_log(label + ": " + message);
                     };
                 }
                 const auto result = pdcode_simplify::reduce_pd_code(

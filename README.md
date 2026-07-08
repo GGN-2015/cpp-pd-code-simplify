@@ -23,7 +23,7 @@ Run one PD code:
 On Windows, use `.\build\bin\pd_simplify.exe` for the executable path.
 Add `--json` to get machine-readable output with `final_pd_code` and
 `final_crossings`. Add `--verbose` to print progress logs to stderr, including
-the current reduction round and crossing count.
+the local timestamp, current reduction round, and crossing count.
 
 Create a redistributable package with the CLI, shared library, headers, and
 documentation:
