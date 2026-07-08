@@ -86,6 +86,8 @@ component.
 --pd-file FILE, -f FILE        Read one input file.
 --pd-dir DIR, -d DIR           Read every .txt and .pd file in a directory.
 --json                         Print JSON output.
+--simplify-pd                  Enable R1 then nugatory PD simplification.
+--no-simplify-pd, --raw-pd     Disable PD simplification.
 --max-paths N                  Cap accepted green paths; use -1 for unlimited.
 --known-crossingless-components N
                                Add N components not representable in PD code.
@@ -109,8 +111,13 @@ components would become crossingless:
 pd_simplify --remove-crossings 0,1,2 --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 ```
 
-The process exits with code `0` when a witness is found, `1` when no witness
-is found, and `2` for invalid input or runtime errors.
+R1-move removal followed by nugatory-crossing removal is enabled by default.
+Batch mode keeps going after a single input fails; failed items are reported
+with an `error` field in JSON output or an `error:` line in text output.
+
+The process exits with code `0` when every input finds a witness, `1` when at
+least one input completes without a witness, and `2` when at least one input
+reports an error.
 
 ## C++ Library Use
 
@@ -119,7 +126,8 @@ is found, and `2` for invalid input or runtime errors.
 
 auto code = pdcode_simplify::parse_pd_code("PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]");
 auto components = pdcode_simplify::analyze_components(code);
-auto result = pdcode_simplify::find_simplification(code);
+auto prepared = pdcode_simplify::simplify_pd_code(code);
+auto result = pdcode_simplify::find_simplification(prepared.code);
 ```
 
 The library also includes deterministic test helpers for Reidemeister I/II

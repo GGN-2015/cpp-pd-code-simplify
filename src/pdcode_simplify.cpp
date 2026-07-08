@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <deque>
 #include <limits>
 #include <map>
@@ -122,6 +123,355 @@ int label_occurrences_outside(const PDCode& code, int label, const std::set<int>
         }
     }
     return count;
+}
+
+int unique_label_count(const Crossing& crossing) {
+    return static_cast<int>(std::set<int>(crossing.begin(), crossing.end()).size());
+}
+
+std::vector<int> pd_value_set(const PDCode& code) {
+    std::set<int> values;
+    for (const Crossing& crossing : code) {
+        values.insert(crossing.begin(), crossing.end());
+    }
+    return std::vector<int>(values.begin(), values.end());
+}
+
+bool contains_value(const std::vector<int>& values, int value) {
+    return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+void add_undirected_vector_edge(std::map<int, std::vector<int>>& graph, int a, int b) {
+    std::vector<int>& first = graph[a];
+    if (std::find(first.begin(), first.end(), b) == first.end()) {
+        first.push_back(b);
+    }
+    std::vector<int>& second = graph[b];
+    if (std::find(second.begin(), second.end(), a) == second.end()) {
+        second.push_back(a);
+    }
+}
+
+void add_undirected_set_edge(std::map<int, std::set<int>>& graph, int a, int b) {
+    graph[a].insert(b);
+    graph[b].insert(a);
+}
+
+std::map<int, std::vector<int>> pd_adjacency_vector(const PDCode& code) {
+    std::map<int, std::vector<int>> graph;
+    for (const Crossing& crossing : code) {
+        add_undirected_vector_edge(graph, crossing[0], crossing[2]);
+        add_undirected_vector_edge(graph, crossing[1], crossing[3]);
+    }
+    return graph;
+}
+
+PDCode renumber_r1_order(PDCode code) {
+    if (code.empty()) {
+        return code;
+    }
+
+    const std::vector<int> values = pd_value_set(code);
+    const std::map<int, std::vector<int>> graph = pd_adjacency_vector(code);
+    std::vector<int> visit_order;
+    for (int value : values) {
+        if (contains_value(visit_order, value)) {
+            continue;
+        }
+        if (graph.find(value) == graph.end()) {
+            throw std::runtime_error("Invalid PD graph during R1 renumbering");
+        }
+        visit_order.push_back(value);
+        while (true) {
+            const int current = visit_order.back();
+            std::vector<int> neighbors = graph.at(current);
+            std::sort(neighbors.begin(), neighbors.end());
+            bool advanced = false;
+            for (int next : neighbors) {
+                if (!contains_value(visit_order, next)) {
+                    visit_order.push_back(next);
+                    advanced = true;
+                    break;
+                }
+            }
+            if (!advanced) {
+                break;
+            }
+        }
+    }
+
+    std::map<int, int> new_label;
+    for (int i = 0; i < static_cast<int>(visit_order.size()); ++i) {
+        new_label[visit_order[i]] = i;
+    }
+    for (Crossing& crossing : code) {
+        for (int& label : crossing) {
+            label = new_label.at(label);
+        }
+    }
+    return code;
+}
+
+PDCode erase_r1_moves(PDCode code, std::size_t& crossingless_components, int& moves) {
+    if (!code.empty()) {
+        build_label_map(code);
+    }
+
+    while (true) {
+        bool changed = false;
+        for (int crossing_index = 0; crossing_index < static_cast<int>(code.size()); ++crossing_index) {
+            if (unique_label_count(code[crossing_index]) > 3) {
+                continue;
+            }
+
+            const Crossing crossing = code[crossing_index];
+            const ComponentAnalysis after_removal =
+                analyze_components_after_removing_crossings(
+                    code, std::vector<int>{crossing_index}, crossingless_components);
+            code.erase(code.begin() + crossing_index);
+
+            std::vector<int> singles;
+            for (int label : crossing) {
+                if (std::count(crossing.begin(), crossing.end(), label) == 1) {
+                    singles.push_back(label);
+                }
+            }
+            if (singles.size() == 2) {
+                replace_label(code, singles[0], singles[1]);
+            }
+
+            crossingless_components = after_removal.crossingless_components;
+            ++moves;
+            changed = true;
+            break;
+        }
+
+        if (!changed) {
+            break;
+        }
+    }
+
+    return renumber_r1_order(code);
+}
+
+std::map<int, std::set<int>> base_pd_graph(const PDCode& code) {
+    std::map<int, std::set<int>> graph;
+    for (int i = 0; i < static_cast<int>(code.size()); ++i) {
+        const int crossing_node = -i - 1;
+        for (int label : code[i]) {
+            add_undirected_set_edge(graph, label, crossing_node);
+        }
+    }
+    return graph;
+}
+
+int graph_component_count(const PDCode& code) {
+    const std::map<int, std::set<int>> graph = base_pd_graph(code);
+    std::set<int> visited;
+    int count = 0;
+    for (const auto& item : graph) {
+        const int start = item.first;
+        if (visited.count(start) != 0) {
+            continue;
+        }
+        ++count;
+        std::vector<int> stack(1, start);
+        visited.insert(start);
+        while (!stack.empty()) {
+            const int node = stack.back();
+            stack.pop_back();
+            const auto found = graph.find(node);
+            if (found == graph.end()) {
+                continue;
+            }
+            for (int next : found->second) {
+                if (visited.insert(next).second) {
+                    stack.push_back(next);
+                }
+            }
+        }
+    }
+    return count;
+}
+
+bool is_nugatory_crossing(const PDCode& code, int crossing_index) {
+    if (unique_label_count(code[crossing_index]) != 4) {
+        throw std::runtime_error("Nugatory check requires an R1-free PD code");
+    }
+    PDCode without = code;
+    without.erase(without.begin() + crossing_index);
+    return graph_component_count(without) > graph_component_count(code);
+}
+
+int find_nugatory_crossing(const PDCode& code) {
+    for (int i = 0; i < static_cast<int>(code.size()); ++i) {
+        if (is_nugatory_crossing(code, i)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void add_pre_next_edge(std::map<int, int>& previous, std::map<int, int>& next, int a, int b) {
+    int previous_value = 0;
+    int next_value = 0;
+    if (std::abs(a - b) == 1) {
+        previous_value = a < b ? a : b;
+        next_value = a < b ? b : a;
+    } else {
+        previous_value = a < b ? b : a;
+        next_value = a < b ? a : b;
+    }
+    previous[next_value] = previous_value;
+    next[previous_value] = next_value;
+}
+
+std::pair<std::map<int, int>, std::map<int, int>> pre_next_maps(const PDCode& code) {
+    if (!code.empty()) {
+        build_label_map(code);
+    }
+
+    std::map<int, int> previous;
+    std::map<int, int> next;
+    for (const Crossing& crossing : code) {
+        if (unique_label_count(crossing) > 2) {
+            add_pre_next_edge(previous, next, crossing[0], crossing[2]);
+            add_pre_next_edge(previous, next, crossing[1], crossing[3]);
+        } else {
+            std::vector<int> values(crossing.begin(), crossing.end());
+            std::sort(values.begin(), values.end());
+            values.erase(std::unique(values.begin(), values.end()), values.end());
+            if (values.size() != 2) {
+                throw std::runtime_error("Invalid two-value crossing in pre/next maps");
+            }
+            previous[values[0]] = values[1];
+            next[values[0]] = values[1];
+            previous[values[1]] = values[0];
+            next[values[1]] = values[0];
+        }
+    }
+
+    for (int label : pd_value_set(code)) {
+        if (previous.count(label) == 0) {
+            if (next.count(label) == 0) {
+                throw std::runtime_error("Broken PD pre/next map");
+            }
+            previous[label] = next[label];
+        }
+        if (next.count(label) == 0) {
+            next[label] = previous[label];
+        }
+    }
+    return std::make_pair(previous, next);
+}
+
+PDCode replace_arc_value(PDCode code, int from, int to) {
+    replace_label(code, from, to);
+    return code;
+}
+
+PDCode renumber_full_dfs(PDCode code) {
+    if (code.empty()) {
+        return code;
+    }
+
+    const std::vector<int> values = pd_value_set(code);
+    std::map<int, std::set<int>> graph;
+    for (const Crossing& crossing : code) {
+        add_undirected_set_edge(graph, crossing[0], crossing[2]);
+        add_undirected_set_edge(graph, crossing[1], crossing[3]);
+    }
+
+    std::set<int> visited;
+    std::map<int, int> new_label;
+    for (int start : values) {
+        if (visited.count(start) != 0) {
+            continue;
+        }
+        std::vector<int> stack(1, start);
+        while (!stack.empty()) {
+            const int value = stack.back();
+            stack.pop_back();
+            if (visited.count(value) != 0) {
+                continue;
+            }
+            const auto found = graph.find(value);
+            if (found == graph.end()) {
+                throw std::runtime_error("Invalid PD graph during renumbering");
+            }
+            new_label[value] = static_cast<int>(visited.size());
+            visited.insert(value);
+            for (std::set<int>::const_reverse_iterator it = found->second.rbegin();
+                 it != found->second.rend();
+                 ++it) {
+                if (visited.count(*it) == 0) {
+                    stack.push_back(*it);
+                }
+            }
+        }
+    }
+
+    if (new_label.size() != values.size()) {
+        throw std::runtime_error("PD renumbering failed");
+    }
+    for (Crossing& crossing : code) {
+        for (int& label : crossing) {
+            label = new_label.at(label);
+        }
+    }
+    return code;
+}
+
+PDCode erase_one_nugatory_crossing(
+    PDCode code,
+    int crossing_index,
+    std::size_t& crossingless_components,
+    int& moves) {
+    if (unique_label_count(code[crossing_index]) != 4) {
+        throw std::runtime_error("Nugatory erase requires an R1-free PD code");
+    }
+
+    const Crossing crossing = code[crossing_index];
+    const int ax = crossing[0];
+    const int bx = crossing[1];
+    const int cx = crossing[2];
+    const int dx = crossing[3];
+    const std::map<int, int> next = pre_next_maps(code).second;
+
+    std::vector<int> loop(1, ax);
+    const std::size_t guard = pd_value_set(code).size() + 1;
+    while (true) {
+        const auto found = next.find(loop.back());
+        if (found == next.end()) {
+            throw std::runtime_error("Broken loop while erasing nugatory crossing");
+        }
+        const int next_label = found->second;
+        loop.push_back(next_label);
+        if (next_label == ax) {
+            loop.pop_back();
+            break;
+        }
+        if (loop.size() > guard) {
+            throw std::runtime_error("Failed to close PD loop while erasing nugatory crossing");
+        }
+    }
+
+    const std::set<int> loop_set(loop.begin(), loop.end());
+    if (loop_set.count(ax) == 0 || loop_set.count(bx) == 0 ||
+        loop_set.count(cx) == 0 || loop_set.count(dx) == 0) {
+        throw std::runtime_error("Nugatory crossing arcs are not in one component");
+    }
+
+    const ComponentAnalysis after_removal =
+        analyze_components_after_removing_crossings(
+            code, std::vector<int>{crossing_index}, crossingless_components);
+
+    code.erase(code.begin() + crossing_index);
+    code = replace_arc_value(code, ax, cx);
+    code = replace_arc_value(code, dx, bx);
+    crossingless_components = after_removal.crossingless_components;
+    ++moves;
+    return renumber_full_dfs(code);
 }
 
 std::vector<std::vector<int>> raw_faces_from_pd_code(const PDCode& code) {
@@ -1241,6 +1591,33 @@ ReidemeisterSimplificationResult simplify_reidemeister_i_ii(
             continue;
         }
         break;
+    }
+
+    return result;
+}
+
+PDSimplificationResult simplify_pd_code(
+    const PDCode& code,
+    std::size_t known_crossingless_components) {
+    PDSimplificationResult result;
+    result.code = code;
+    result.crossingless_components = known_crossingless_components;
+
+    result.code = erase_r1_moves(
+        result.code,
+        result.crossingless_components,
+        result.reidemeister_i_moves);
+
+    while (true) {
+        const int crossing_index = find_nugatory_crossing(result.code);
+        if (crossing_index < 0) {
+            break;
+        }
+        result.code = erase_one_nugatory_crossing(
+            result.code,
+            crossing_index,
+            result.crossingless_components,
+            result.nugatory_crossing_moves);
     }
 
     return result;

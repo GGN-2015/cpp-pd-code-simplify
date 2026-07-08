@@ -8,6 +8,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Sequence
 
@@ -71,9 +72,25 @@ def load_cases(args: argparse.Namespace) -> Dict[str, str]:
     return cases
 
 
-def run_cpp(cpp_exe: str, pd_text: str, max_paths: int) -> Dict[str, object]:
+def write_case_file(cases: Dict[str, str]) -> str:
+    handle = tempfile.NamedTemporaryFile("w", suffix=".pd", encoding="utf-8", delete=False)
+    with handle:
+        for name, pd_text in cases.items():
+            handle.write(f"{name}: {pd_text}\n")
+    return handle.name
+
+
+def as_list(payload: object) -> List[Dict[str, object]]:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return [payload]
+    raise TypeError(f"unexpected JSON payload type: {type(payload)!r}")
+
+
+def run_cpp_batch(cpp_exe: str, pd_file: str, max_paths: int) -> List[Dict[str, object]]:
     proc = subprocess.run(
-        [cpp_exe, "--json", "--pd-code", pd_text, "--max-paths", str(max_paths)],
+        [cpp_exe, "--json", "--pd-file", pd_file, "--max-paths", str(max_paths)],
         cwd=str(ROOT),
         text=True,
         stdout=subprocess.PIPE,
@@ -81,15 +98,28 @@ def run_cpp(cpp_exe: str, pd_text: str, max_paths: int) -> Dict[str, object]:
     )
     if proc.returncode not in (0, 1):
         raise RuntimeError(f"C++ run failed ({proc.returncode}): {proc.stderr.strip()}")
-    return json.loads(proc.stdout)
+    return as_list(json.loads(proc.stdout))
 
 
-def run_python(pd_text: str, max_paths: int) -> Dict[str, object]:
-    jobs = pysimplify.parse_pd_document(pd_text, "command-line")
-    if len(jobs) != 1:
-        raise ValueError("Differential cases must contain exactly one PD block")
-    result, components, after_removal = pysimplify.run_job(jobs[0], max_paths=max_paths)
-    return result.to_json(components, after_removal)
+def run_python_cli_batch(pd_file: str, max_paths: int) -> List[Dict[str, object]]:
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "mid_simplify_v5.py"),
+            "--json",
+            "--pd-file",
+            pd_file,
+            "--max-paths",
+            str(max_paths),
+        ],
+        cwd=str(ROOT),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode not in (0, 1):
+        raise RuntimeError(f"Python run failed ({proc.returncode}): {proc.stderr.strip()}")
+    return as_list(json.loads(proc.stdout))
 
 
 def canonical(data: Dict[str, object]) -> Dict[str, object]:
@@ -109,10 +139,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     cpp_exe = args.cpp_exe or default_cpp_exe()
     cases = load_cases(args)
     mismatches: List[str] = []
+    pd_file = write_case_file(cases)
+    try:
+        cpp_results = [canonical(item) for item in run_cpp_batch(cpp_exe, pd_file, args.max_paths)]
+        py_results = [canonical(item) for item in run_python_cli_batch(pd_file, args.max_paths)]
+    finally:
+        Path(pd_file).unlink(missing_ok=True)
 
-    for name, pd_text in cases.items():
-        cpp_result = canonical(run_cpp(cpp_exe, pd_text, args.max_paths))
-        py_result = canonical(run_python(pd_text, args.max_paths))
+    if len(cpp_results) != len(py_results):
+        raise RuntimeError(f"result count mismatch: C++={len(cpp_results)} Python={len(py_results)}")
+
+    for name, cpp_result, py_result in zip(cases, cpp_results, py_results):
         if cpp_result != py_result:
             mismatches.append(name)
             print(f"[FAIL] {name}")

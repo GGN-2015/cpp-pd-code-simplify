@@ -2,7 +2,9 @@
 
 `mid_simplify_v5.py` is a refactored pure Python version of the
 mid-simplification search. It exposes both a Python API and a command-line
-interface.
+interface. Its CLI and `run_job` helper run pure Python R1-move removal
+followed by pure Python nugatory-crossing removal before the search by
+default.
 
 ## Environment
 
@@ -24,6 +26,12 @@ Run one PD code:
 python mid_simplify_v5.py --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 ```
 
+Disable preprocessing only for raw-algorithm debugging:
+
+```sh
+python mid_simplify_v5.py --no-simplify-pd --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
+```
+
 Report crossingless components after removing all trefoil crossings:
 
 ```sh
@@ -36,7 +44,8 @@ python mid_simplify_v5.py --remove-crossings 0,1,2 --pd-code "PD[X[1,5,2,4],X[3,
 import mid_simplify_v5 as simplify
 
 code = simplify.parse_pd_code("PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]")
-result = simplify.find_simplification(code, max_paths=100)
+prepared = simplify.simplify_pd_code(code)
+result = simplify.find_simplification(prepared.code, max_paths=100)
 print(result.found)
 ```
 

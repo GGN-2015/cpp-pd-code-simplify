@@ -1,0 +1,35 @@
+[project]
+name = "cpp-pd-code-simplify-interface"
+version = "0.1.1"
+description = "Python interface for cpp-pd-code-simplify with runtime C++ compilation."
+authors = [
+    {name = "GGN_2015", email = "neko@jlulug.org"}
+]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cpp-simple-interface>=0.1.2"
+]
+
+[project.urls]
+Homepage = "https://github.com/GGN-2015/cpp-pd-code-simplify"
+Repository = "https://github.com/GGN-2015/cpp-pd-code-simplify"
+Documentation = "https://github.com/GGN-2015/cpp-pd-code-simplify/blob/main/docs/python-interface.md"
+
+[project.scripts]
+cpp-pd-code-simplify-interface = "cpp_pd_code_simplify_interface.main:main"
+
+[tool.poetry]
+packages = [{ include = "cpp_pd_code_simplify_interface" }]
+include = [
+    { path = "build_backend/cpp_pd_code_simplify_interface_build_backend.py", format = ["sdist"] },
+    { path = "cpp_pd_code_simplify_interface/data/src/native_interface.cpp", format = ["sdist", "wheel"] },
+    { path = "cpp_pd_code_simplify_interface/data/src/pdcode_simplify.cpp", format = ["sdist", "wheel"] },
+    { path = "cpp_pd_code_simplify_interface/data/include/pdcode_simplify/pdcode_simplify.hpp", format = ["sdist", "wheel"] }
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0", "setuptools>=61"]
+build-backend = "cpp_pd_code_simplify_interface_build_backend"
+backend-path = ["build_backend"]

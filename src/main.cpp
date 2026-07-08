@@ -26,6 +26,11 @@ struct PDJob {
     std::string label;
     pdcode_simplify::PDCode code;
     std::size_t implied_crossingless_components = 0;
+    std::string error;
+
+    bool has_error() const {
+        return !error.empty();
+    }
 };
 
 void print_help(const char* program) {
@@ -38,6 +43,8 @@ void print_help(const char* program) {
         << "components that cannot be represented by a PD code.\n"
         << "Use --remove-crossings LIST to report component counts after a\n"
         << "zero-based crossing-removal simulation.\n"
+        << "R1-move removal followed by nugatory-crossing removal is enabled by default.\n"
+        << "Use --no-simplify-pd or --raw-pd to compare against the raw Python prototype.\n"
         << "If no input is given, the CLI tries to read PD.txt from the current directory.\n";
 }
 
@@ -193,14 +200,22 @@ std::vector<PDJob> parse_pd_document(const std::string& text, const std::string&
             }
         }
         if (end == std::string::npos) {
-            throw std::runtime_error("Unterminated PD[...] block in " + label_prefix);
+            PDJob job;
+            job.label = label_prefix + "#" + std::to_string(index + 1);
+            job.error = "Unterminated PD[...] block";
+            jobs.push_back(std::move(job));
+            break;
         }
 
         PDJob job;
         job.label = label_for_block(text, start, label_prefix, index);
         const std::string block = text.substr(start, end - start + 1);
-        job.code = pdcode_simplify::parse_pd_code(block);
-        job.implied_crossingless_components = denotes_crossingless_unknot(block) ? 1 : 0;
+        try {
+            job.code = pdcode_simplify::parse_pd_code(block);
+            job.implied_crossingless_components = denotes_crossingless_unknot(block) ? 1 : 0;
+        } catch (const std::exception& error) {
+            job.error = error.what();
+        }
         jobs.push_back(std::move(job));
         ++index;
         pos = end + 1;
@@ -214,7 +229,7 @@ std::vector<PDJob> parse_pd_document(const std::string& text, const std::string&
     std::string line;
     while (std::getline(lines, line)) {
         const std::string cleaned = trim(line);
-        if (cleaned.empty()) {
+        if (cleaned.empty() || cleaned[0] == '#') {
             continue;
         }
 
@@ -240,8 +255,12 @@ std::vector<PDJob> parse_pd_document(const std::string& text, const std::string&
 
         PDJob job;
         job.label = label;
-        job.code = pdcode_simplify::parse_pd_code(payload);
-        job.implied_crossingless_components = denotes_crossingless_unknot(payload) ? 1 : 0;
+        try {
+            job.code = pdcode_simplify::parse_pd_code(payload);
+            job.implied_crossingless_components = denotes_crossingless_unknot(payload) ? 1 : 0;
+        } catch (const std::exception& error) {
+            job.error = error.what();
+        }
         jobs.push_back(std::move(job));
     }
 
@@ -309,11 +328,23 @@ void print_vector_ints(const std::vector<int>& values) {
 void print_text_result(
     const pdcode_simplify::SimplificationResult& result,
     const pdcode_simplify::ComponentAnalysis& input_components,
-    const pdcode_simplify::ComponentAnalysis* after_removal_components) {
+    const pdcode_simplify::ComponentAnalysis* after_removal_components,
+    const pdcode_simplify::PDSimplificationResult* pd_simplification,
+    const pdcode_simplify::ComponentAnalysis* search_components) {
     std::cout << "simplification_found: " << (result.found ? "yes" : "no") << '\n';
     print_component_counts(input_components, "input");
     if (after_removal_components != nullptr) {
         print_component_counts(*after_removal_components, "after_removal");
+    }
+    if (pd_simplification != nullptr && search_components != nullptr) {
+        std::cout << "pd_simplification_enabled: yes\n";
+        std::cout << "pd_simplification_reidemeister_i_moves: "
+                  << pd_simplification->reidemeister_i_moves << '\n';
+        std::cout << "pd_simplification_nugatory_crossing_moves: "
+                  << pd_simplification->nugatory_crossing_moves << '\n';
+        std::cout << "pd_simplification_output_crossings: "
+                  << pd_simplification->code.size() << '\n';
+        print_component_counts(*search_components, "search");
     }
     std::cout << "tested_red_paths: " << result.tested_red_paths << '\n';
     std::cout << "tested_green_paths: " << result.tested_green_paths << '\n';
@@ -338,6 +369,10 @@ void print_text_result(
                   << ", " << crossing.strand_level << ')';
     }
     std::cout << "]\n";
+}
+
+void print_text_error(const std::string& error) {
+    std::cout << "error: " << error << '\n';
 }
 
 void print_json_component_counts(const pdcode_simplify::ComponentAnalysis& analysis) {
@@ -377,6 +412,8 @@ void print_json_result(
     const pdcode_simplify::SimplificationResult& result,
     const pdcode_simplify::ComponentAnalysis& input_components,
     const pdcode_simplify::ComponentAnalysis* after_removal_components,
+    const pdcode_simplify::PDSimplificationResult* pd_simplification,
+    const pdcode_simplify::ComponentAnalysis* search_components,
     const std::string* label = nullptr) {
     std::cout << "{\n";
     if (label != nullptr) {
@@ -389,6 +426,18 @@ void print_json_result(
     if (after_removal_components != nullptr) {
         std::cout << "  \"after_removal_components\": {";
         print_json_component_counts(*after_removal_components);
+        std::cout << "},\n";
+    }
+    if (pd_simplification != nullptr && search_components != nullptr) {
+        std::cout << "  \"pd_simplification\": {"
+                  << "\"enabled\":true,"
+                  << "\"reidemeister_i_moves\":" << pd_simplification->reidemeister_i_moves << ","
+                  << "\"nugatory_crossing_moves\":"
+                  << pd_simplification->nugatory_crossing_moves << ","
+                  << "\"output_crossings\":" << pd_simplification->code.size()
+                  << "},\n";
+        std::cout << "  \"search_components\": {";
+        print_json_component_counts(*search_components);
         std::cout << "},\n";
     }
     std::cout << "  \"tested_red_paths\": " << result.tested_red_paths << ",\n";
@@ -430,12 +479,22 @@ void print_json_result(
     std::cout << "}\n";
 }
 
+void print_json_error(const std::string& error, const std::string* label = nullptr) {
+    std::cout << "{\n";
+    if (label != nullptr) {
+        std::cout << "  \"label\": \"" << json_escape(*label) << "\",\n";
+    }
+    std::cout << "  \"error\": \"" << json_escape(error) << "\"\n";
+    std::cout << "}\n";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     try {
         pdcode_simplify::SimplifierOptions options;
         bool json = false;
+        bool simplify_pd = true;
         std::size_t known_crossingless_components = 0;
         std::vector<int> removed_crossings;
         bool has_removal_simulation = false;
@@ -451,6 +510,10 @@ int main(int argc, char** argv) {
             }
             if (arg == "--json") {
                 json = true;
+            } else if (arg == "--simplify-pd") {
+                simplify_pd = true;
+            } else if (arg == "--no-simplify-pd" || arg == "--raw-pd") {
+                simplify_pd = false;
             } else if (arg == "--max-paths") {
                 if (i + 1 >= argc) {
                     throw std::invalid_argument("--max-paths requires a value");
@@ -527,47 +590,79 @@ int main(int argc, char** argv) {
 
         const bool show_labels = jobs.size() > 1;
         bool all_found = true;
+        bool had_error = false;
 
         if (json && jobs.size() > 1) {
             std::cout << "[\n";
         }
 
         for (std::size_t i = 0; i < jobs.size(); ++i) {
-            const std::size_t job_crossingless_components =
-                known_crossingless_components + jobs[i].implied_crossingless_components;
-            const auto input_components = pdcode_simplify::analyze_components(
-                jobs[i].code, job_crossingless_components);
-            pdcode_simplify::ComponentAnalysis after_removal_components;
-            if (has_removal_simulation) {
-                after_removal_components = pdcode_simplify::analyze_components_after_removing_crossings(
-                    jobs[i].code, removed_crossings, job_crossingless_components);
-            }
-            const auto result = pdcode_simplify::find_simplification(jobs[i].code, options);
-            all_found = all_found && result.found;
+            try {
+                if (jobs[i].has_error()) {
+                    throw std::runtime_error(jobs[i].error);
+                }
 
-            if (json) {
-                print_json_result(
-                    result,
-                    input_components,
-                    has_removal_simulation ? &after_removal_components : nullptr,
-                    show_labels ? &jobs[i].label : nullptr);
-                if (jobs.size() > 1 && i + 1 < jobs.size()) {
-                    std::cout << ",";
+                const std::size_t job_crossingless_components =
+                    known_crossingless_components + jobs[i].implied_crossingless_components;
+                const auto input_components = pdcode_simplify::analyze_components(
+                    jobs[i].code, job_crossingless_components);
+                pdcode_simplify::ComponentAnalysis after_removal_components;
+                if (has_removal_simulation) {
+                    after_removal_components = pdcode_simplify::analyze_components_after_removing_crossings(
+                        jobs[i].code, removed_crossings, job_crossingless_components);
                 }
-                if (jobs.size() > 1) {
-                    std::cout << "\n";
+
+                pdcode_simplify::PDCode search_code = jobs[i].code;
+                pdcode_simplify::PDSimplificationResult pd_simplification;
+                pdcode_simplify::ComponentAnalysis search_components;
+                if (simplify_pd) {
+                    pd_simplification = pdcode_simplify::simplify_pd_code(
+                        jobs[i].code, job_crossingless_components);
+                    search_code = pd_simplification.code;
+                    search_components = pdcode_simplify::analyze_components(
+                        search_code, pd_simplification.crossingless_components);
                 }
-            } else {
-                if (show_labels) {
-                    std::cout << jobs[i].label << ":\n";
+
+                const auto result = pdcode_simplify::find_simplification(search_code, options);
+                all_found = all_found && result.found;
+
+                if (json) {
+                    print_json_result(
+                        result,
+                        input_components,
+                        has_removal_simulation ? &after_removal_components : nullptr,
+                        simplify_pd ? &pd_simplification : nullptr,
+                        simplify_pd ? &search_components : nullptr,
+                        show_labels ? &jobs[i].label : nullptr);
+                } else {
+                    if (show_labels) {
+                        std::cout << jobs[i].label << ":\n";
+                    }
+                    print_text_result(
+                        result,
+                        input_components,
+                        has_removal_simulation ? &after_removal_components : nullptr,
+                        simplify_pd ? &pd_simplification : nullptr,
+                        simplify_pd ? &search_components : nullptr);
                 }
-                print_text_result(
-                    result,
-                    input_components,
-                    has_removal_simulation ? &after_removal_components : nullptr);
-                if (show_labels && i + 1 < jobs.size()) {
-                    std::cout << '\n';
+            } catch (const std::exception& error) {
+                had_error = true;
+                all_found = false;
+                if (json) {
+                    print_json_error(error.what(), show_labels ? &jobs[i].label : nullptr);
+                } else {
+                    if (show_labels) {
+                        std::cout << jobs[i].label << ":\n";
+                    }
+                    print_text_error(error.what());
                 }
+            }
+
+            if (json && jobs.size() > 1 && i + 1 < jobs.size()) {
+                std::cout << ",";
+            }
+            if (jobs.size() > 1) {
+                std::cout << "\n";
             }
         }
 
@@ -575,6 +670,9 @@ int main(int argc, char** argv) {
             std::cout << "]\n";
         }
 
+        if (had_error) {
+            return 2;
+        }
         return all_found ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';

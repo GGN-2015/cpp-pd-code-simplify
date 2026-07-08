@@ -1,0 +1,170 @@
+{
+  "max_paths": 100,
+  "repeat": 3,
+  "suite": "random",
+  "raw": [
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "cpp",
+      "repeat": 1,
+      "time_seconds": 1.7727614000905305,
+      "avg_time_per_case_seconds": 0.17727614000905306,
+      "peak_rss_mib": 6.1015625,
+      "return_code": 0
+    },
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "interface",
+      "repeat": 1,
+      "time_seconds": 1.9543296999763697,
+      "avg_time_per_case_seconds": 0.19543296999763698,
+      "peak_rss_mib": 30.578125,
+      "return_code": 0
+    },
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "python",
+      "repeat": 1,
+      "time_seconds": 3.8616361001040787,
+      "avg_time_per_case_seconds": 0.3861636100104079,
+      "peak_rss_mib": 24.6875,
+      "return_code": 0
+    },
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "cpp",
+      "repeat": 2,
+      "time_seconds": 2.1616770999971777,
+      "avg_time_per_case_seconds": 0.21616770999971777,
+      "peak_rss_mib": 6.02734375,
+      "return_code": 0
+    },
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "interface",
+      "repeat": 2,
+      "time_seconds": 2.1080440999940038,
+      "avg_time_per_case_seconds": 0.21080440999940037,
+      "peak_rss_mib": 30.3984375,
+      "return_code": 0
+    },
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "python",
+      "repeat": 2,
+      "time_seconds": 4.000426200218499,
+      "avg_time_per_case_seconds": 0.40004262002184987,
+      "peak_rss_mib": 24.4453125,
+      "return_code": 0
+    },
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "cpp",
+      "repeat": 3,
+      "time_seconds": 2.2694892999716103,
+      "avg_time_per_case_seconds": 0.22694892999716104,
+      "peak_rss_mib": 6.1015625,
+      "return_code": 0
+    },
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "interface",
+      "repeat": 3,
+      "time_seconds": 2.2079675998538733,
+      "avg_time_per_case_seconds": 0.22079675998538734,
+      "peak_rss_mib": 30.27734375,
+      "return_code": 0
+    },
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "python",
+      "repeat": 3,
+      "time_seconds": 4.036103100050241,
+      "avg_time_per_case_seconds": 0.40361031000502406,
+      "peak_rss_mib": 24.4921875,
+      "return_code": 0
+    }
+  ],
+  "summary": [
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "cpp",
+      "runs": 3,
+      "avg_time_seconds": 2.067975933353106,
+      "avg_time_per_case_seconds": 0.20679759333531061,
+      "avg_peak_rss_mib": 6.076822916666667,
+      "return_codes": "0"
+    },
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "interface",
+      "runs": 3,
+      "avg_time_seconds": 2.0901137999414154,
+      "avg_time_per_case_seconds": 0.20901137999414157,
+      "avg_peak_rss_mib": 30.41796875,
+      "return_codes": "0"
+    },
+    {
+      "case": "batch",
+      "family": "mixed",
+      "crossings": 1373,
+      "case_count": 10,
+      "engine": "python",
+      "runs": 3,
+      "avg_time_seconds": 3.966055133457606,
+      "avg_time_per_case_seconds": 0.3966055133457606,
+      "avg_peak_rss_mib": 24.541666666666668,
+      "return_codes": "0"
+    }
+  ],
+  "aggregate": {
+    "cpp": {
+      "avg_time_seconds": 2.067975933353106,
+      "avg_time_per_case_seconds": 0.20679759333531061,
+      "avg_peak_rss_mib": 6.076822916666667
+    },
+    "interface": {
+      "avg_time_seconds": 2.0901137999414154,
+      "avg_time_per_case_seconds": 0.20901137999414157,
+      "avg_peak_rss_mib": 30.41796875
+    },
+    "python": {
+      "avg_time_seconds": 3.966055133457606,
+      "avg_time_per_case_seconds": 0.3966055133457606,
+      "avg_peak_rss_mib": 24.541666666666668
+    }
+  }
+}

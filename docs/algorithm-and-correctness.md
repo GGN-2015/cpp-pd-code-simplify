@@ -39,6 +39,19 @@ that it crosses. This is important later: a candidate green path is a path
 in the dual graph, but the over/under consistency test must know exactly
 which diagram strand each dual edge crosses.
 
+## PD Preprocessing
+
+The command-line tools and high-level Python helpers first simplify the PD
+code by removing R1 moves and then nugatory crossings. The C++ implementation
+does this in C++; the Python prototype implements the same preprocessing in
+Python. Both versions update the explicit crossingless-component count when a
+deleted crossing was the last crossing of a component.
+
+The lower-level `find_simplification` function still searches exactly the PD
+code it receives. This keeps the mid-simplification search independently
+testable while the user-facing tools run the faster default preprocessing
+pipeline.
+
 ## Red Path Enumeration
 
 The simplification search starts from possible red boundary arcs. For each
@@ -93,6 +106,8 @@ The library therefore tracks component metadata separately:
   crossing indices;
 - `simplify_reidemeister_i_ii` preserves this count while removing
   Reidemeister I and II patterns.
+- `simplify_pd_code` preserves this count while removing R1 moves and
+  nugatory crossings before the mid-simplification search.
 
 This makes deletion-safe simplification possible even when the resulting PD
 code is empty.

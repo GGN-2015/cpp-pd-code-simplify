@@ -90,6 +90,8 @@ class SimplificationResult:
         self,
         input_components: Optional[ComponentAnalysis] = None,
         after_removal_components: Optional[ComponentAnalysis] = None,
+        pd_simplification: Optional[PDSimplificationResult] = None,
+        search_components: Optional[ComponentAnalysis] = None,
         label: Optional[str] = None,
     ) -> Dict[str, object]:
         data: Dict[str, object] = {}
@@ -100,6 +102,9 @@ class SimplificationResult:
             data["input_components"] = input_components.to_json()
         if after_removal_components is not None:
             data["after_removal_components"] = after_removal_components.to_json()
+        if pd_simplification is not None and search_components is not None:
+            data["pd_simplification"] = pd_simplification.to_json()
+            data["search_components"] = search_components.to_json()
         data["tested_red_paths"] = self.tested_red_paths
         data["tested_green_paths"] = self.tested_green_paths
         if self.found:
@@ -116,10 +121,27 @@ class SimplificationResult:
 
 
 @dataclass
+class PDSimplificationResult:
+    code: PDCode
+    crossingless_components: int = 0
+    reidemeister_i_moves: int = 0
+    nugatory_crossing_moves: int = 0
+
+    def to_json(self) -> Dict[str, object]:
+        return {
+            "enabled": True,
+            "reidemeister_i_moves": self.reidemeister_i_moves,
+            "nugatory_crossing_moves": self.nugatory_crossing_moves,
+            "output_crossings": len(self.code),
+        }
+
+
+@dataclass
 class PDJob:
     label: str
-    code: PDCode
+    code: PDCode = field(default_factory=list)
     implied_crossingless_components: int = 0
+    error: str = ""
 
 
 def endpoint_key(endpoint: Endpoint) -> int:
@@ -493,6 +515,273 @@ def analyze_components_after_removing_crossings(
     return reduced
 
 
+def unique_label_count(crossing: Sequence[int]) -> int:
+    return len(set(crossing))
+
+
+def value_set(code: PDCode) -> List[int]:
+    return sorted({label for crossing in code for label in crossing})
+
+
+def replace_label(code: PDCode, old_label: int, new_label: int) -> PDCode:
+    if old_label == new_label:
+        return [tuple(crossing) for crossing in code]
+    return [
+        tuple(new_label if label == old_label else label for label in crossing)  # type: ignore[misc]
+        for crossing in code
+    ]
+
+
+def add_vector_edge(graph: Dict[int, List[int]], a: int, b: int) -> None:
+    graph.setdefault(a, [])
+    graph.setdefault(b, [])
+    if b not in graph[a]:
+        graph[a].append(b)
+    if a not in graph[b]:
+        graph[b].append(a)
+
+
+def pd_adjacency_vector(code: PDCode) -> Dict[int, List[int]]:
+    graph: Dict[int, List[int]] = {}
+    for crossing in code:
+        add_vector_edge(graph, crossing[0], crossing[2])
+        add_vector_edge(graph, crossing[1], crossing[3])
+    return graph
+
+
+def renumber_r1_order(code: PDCode) -> PDCode:
+    if not code:
+        return []
+    graph = pd_adjacency_vector(code)
+    visit_order: List[int] = []
+    for value in value_set(code):
+        if value in visit_order:
+            continue
+        if value not in graph:
+            raise ValueError("Invalid PD graph during R1 renumbering")
+        visit_order.append(value)
+        while True:
+            current = visit_order[-1]
+            advanced = False
+            for nxt in sorted(graph[current]):
+                if nxt not in visit_order:
+                    visit_order.append(nxt)
+                    advanced = True
+                    break
+            if not advanced:
+                break
+    new_label = {value: index for index, value in enumerate(visit_order)}
+    return [tuple(new_label[label] for label in crossing) for crossing in code]  # type: ignore[misc]
+
+
+def erase_r1_moves(
+    code: PDCode,
+    crossingless_components: int,
+) -> Tuple[PDCode, int, int]:
+    if code:
+        Diagram(code)
+    result = [tuple(crossing) for crossing in code]
+    moves = 0
+    while True:
+        changed = False
+        for index, crossing in enumerate(result):
+            if unique_label_count(crossing) > 3:
+                continue
+            after_removal = analyze_components_after_removing_crossings(
+                result,
+                [index],
+                crossingless_components,
+            )
+            result.pop(index)
+            singles = [
+                label for label in crossing if list(crossing).count(label) == 1
+            ]
+            if len(singles) == 2:
+                result = replace_label(result, singles[0], singles[1])
+            crossingless_components = after_removal.crossingless_components
+            moves += 1
+            changed = True
+            break
+        if not changed:
+            break
+    return renumber_r1_order(result), crossingless_components, moves
+
+
+def add_set_edge(graph: Dict[int, Set[int]], a: int, b: int) -> None:
+    graph.setdefault(a, set()).add(b)
+    graph.setdefault(b, set()).add(a)
+
+
+def graph_component_count(code: PDCode) -> int:
+    graph: Dict[int, Set[int]] = {}
+    for crossing_index, crossing in enumerate(code):
+        crossing_node = -crossing_index - 1
+        for label in crossing:
+            add_set_edge(graph, label, crossing_node)
+    visited: Set[int] = set()
+    count = 0
+    for start in graph:
+        if start in visited:
+            continue
+        count += 1
+        stack = [start]
+        visited.add(start)
+        while stack:
+            node = stack.pop()
+            for nxt in graph.get(node, set()):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    stack.append(nxt)
+    return count
+
+
+def is_nugatory_crossing(code: PDCode, index: int) -> bool:
+    if unique_label_count(code[index]) != 4:
+        raise ValueError("Nugatory check requires an R1-free PD code")
+    without = list(code)
+    without.pop(index)
+    return graph_component_count(without) > graph_component_count(code)
+
+
+def find_nugatory_crossing(code: PDCode) -> int:
+    for index in range(len(code)):
+        if is_nugatory_crossing(code, index):
+            return index
+    return -1
+
+
+def add_pre_next_edge(previous: Dict[int, int], nxt: Dict[int, int], a: int, b: int) -> None:
+    if abs(a - b) == 1:
+        previous_value, next_value = (a, b) if a < b else (b, a)
+    else:
+        previous_value, next_value = (b, a) if a < b else (a, b)
+    previous[next_value] = previous_value
+    nxt[previous_value] = next_value
+
+
+def pre_next_maps(code: PDCode) -> Tuple[Dict[int, int], Dict[int, int]]:
+    if code:
+        Diagram(code)
+    previous: Dict[int, int] = {}
+    nxt: Dict[int, int] = {}
+    for crossing in code:
+        if unique_label_count(crossing) > 2:
+            add_pre_next_edge(previous, nxt, crossing[0], crossing[2])
+            add_pre_next_edge(previous, nxt, crossing[1], crossing[3])
+        else:
+            values = sorted(set(crossing))
+            if len(values) != 2:
+                raise ValueError("Invalid two-value crossing in pre/next maps")
+            previous[values[0]] = values[1]
+            nxt[values[0]] = values[1]
+            previous[values[1]] = values[0]
+            nxt[values[1]] = values[0]
+
+    for label in value_set(code):
+        if label not in previous:
+            if label not in nxt:
+                raise ValueError("Broken PD pre/next map")
+            previous[label] = nxt[label]
+        if label not in nxt:
+            nxt[label] = previous[label]
+    return previous, nxt
+
+
+def renumber_full_dfs(code: PDCode) -> PDCode:
+    if not code:
+        return []
+    graph: Dict[int, Set[int]] = {}
+    for crossing in code:
+        add_set_edge(graph, crossing[0], crossing[2])
+        add_set_edge(graph, crossing[1], crossing[3])
+
+    visited: Set[int] = set()
+    new_label: Dict[int, int] = {}
+    for start in value_set(code):
+        if start in visited:
+            continue
+        stack = [start]
+        while stack:
+            value = stack.pop()
+            if value in visited:
+                continue
+            if value not in graph:
+                raise ValueError("Invalid PD graph during renumbering")
+            new_label[value] = len(visited)
+            visited.add(value)
+            for nxt in sorted(graph[value], reverse=True):
+                if nxt not in visited:
+                    stack.append(nxt)
+    if len(new_label) != len(value_set(code)):
+        raise ValueError("PD renumbering failed")
+    return [tuple(new_label[label] for label in crossing) for crossing in code]  # type: ignore[misc]
+
+
+def erase_one_nugatory_crossing(
+    code: PDCode,
+    index: int,
+    crossingless_components: int,
+) -> Tuple[PDCode, int]:
+    if unique_label_count(code[index]) != 4:
+        raise ValueError("Nugatory erase requires an R1-free PD code")
+
+    crossing = code[index]
+    ax, bx, cx, dx = crossing
+    _, nxt = pre_next_maps(code)
+    loop = [ax]
+    guard = len(value_set(code)) + 1
+    while True:
+        if loop[-1] not in nxt:
+            raise ValueError("Broken loop while erasing nugatory crossing")
+        next_label = nxt[loop[-1]]
+        loop.append(next_label)
+        if next_label == ax:
+            loop.pop()
+            break
+        if len(loop) > guard:
+            raise ValueError("Failed to close PD loop while erasing nugatory crossing")
+
+    loop_set = set(loop)
+    if not {ax, bx, cx, dx}.issubset(loop_set):
+        raise ValueError("Nugatory crossing arcs are not in one component")
+
+    after_removal = analyze_components_after_removing_crossings(
+        code,
+        [index],
+        crossingless_components,
+    )
+    result = list(code)
+    result.pop(index)
+    result = replace_label(result, ax, cx)
+    result = replace_label(result, dx, bx)
+    return renumber_full_dfs(result), after_removal.crossingless_components
+
+
+def simplify_pd_code(
+    code: PDCode,
+    known_crossingless_components: int = 0,
+) -> PDSimplificationResult:
+    result = PDSimplificationResult(
+        code=[tuple(crossing) for crossing in code],
+        crossingless_components=known_crossingless_components,
+    )
+    result.code, result.crossingless_components, result.reidemeister_i_moves = erase_r1_moves(
+        result.code,
+        result.crossingless_components,
+    )
+    while True:
+        index = find_nugatory_crossing(result.code)
+        if index < 0:
+            break
+        result.code, result.crossingless_components = erase_one_nugatory_crossing(
+            result.code,
+            index,
+            result.crossingless_components,
+        )
+        result.nugatory_crossing_moves += 1
+    return result
+
+
 def reset_weights(graph: DualGraph) -> None:
     for edge in graph.edges:
         edge.weight = 1
@@ -767,15 +1056,21 @@ def parse_pd_document(text: str, label_prefix: str = "input") -> List[PDJob]:
                     end = i
                     break
         if end == -1:
-            raise ValueError(f"Unterminated PD[...] block in {label_prefix}")
-        block = text[start : end + 1]
-        jobs.append(
-            PDJob(
-                label=label_for_block(text, start, label_prefix, index),
-                code=parse_pd_code(block),
-                implied_crossingless_components=1 if denotes_crossingless_unknot(block) else 0,
+            jobs.append(
+                PDJob(
+                    label=f"{label_prefix}#{index + 1}",
+                    error="Unterminated PD[...] block",
+                )
             )
-        )
+            break
+        block = text[start : end + 1]
+        job = PDJob(label=label_for_block(text, start, label_prefix, index))
+        try:
+            job.code = parse_pd_code(block)
+            job.implied_crossingless_components = 1 if denotes_crossingless_unknot(block) else 0
+        except Exception as exc:
+            job.error = str(exc)
+        jobs.append(job)
         index += 1
         pos = end + 1
 
@@ -784,7 +1079,7 @@ def parse_pd_document(text: str, label_prefix: str = "input") -> List[PDJob]:
 
     for line in text.splitlines():
         cleaned = trim(line)
-        if not cleaned:
+        if not cleaned or cleaned.startswith("#"):
             continue
         payload = cleaned
         label = label_prefix
@@ -798,13 +1093,13 @@ def parse_pd_document(text: str, label_prefix: str = "input") -> List[PDJob]:
             label = f"{label}#{len(jobs) + 1}"
         if not any(ch.isdigit() for ch in payload) and not denotes_crossingless_unknot(payload):
             continue
-        jobs.append(
-            PDJob(
-                label=label,
-                code=parse_pd_code(payload),
-                implied_crossingless_components=1 if denotes_crossingless_unknot(payload) else 0,
-            )
-        )
+        job = PDJob(label=label)
+        try:
+            job.code = parse_pd_code(payload)
+            job.implied_crossingless_components = 1 if denotes_crossingless_unknot(payload) else 0
+        except Exception as exc:
+            job.error = str(exc)
+        jobs.append(job)
     return jobs
 
 
@@ -829,7 +1124,16 @@ def run_job(
     max_paths: int = 100,
     known_crossingless_components: int = 0,
     removed_crossings: Optional[Sequence[int]] = None,
-) -> Tuple[SimplificationResult, ComponentAnalysis, Optional[ComponentAnalysis]]:
+    simplify_pd: bool = True,
+) -> Tuple[
+    SimplificationResult,
+    ComponentAnalysis,
+    Optional[ComponentAnalysis],
+    Optional[PDSimplificationResult],
+    Optional[ComponentAnalysis],
+]:
+    if job.error:
+        raise ValueError(job.error)
     crossingless = known_crossingless_components + job.implied_crossingless_components
     input_components = analyze_components(job.code, crossingless)
     after_removal = None
@@ -837,13 +1141,31 @@ def run_job(
         after_removal = analyze_components_after_removing_crossings(
             job.code, removed_crossings, crossingless
         )
-    return find_simplification(job.code, max_paths), input_components, after_removal
+    pd_simplification = None
+    search_components = None
+    search_code = job.code
+    if simplify_pd:
+        pd_simplification = simplify_pd_code(job.code, crossingless)
+        search_code = pd_simplification.code
+        search_components = analyze_components(
+            search_code,
+            pd_simplification.crossingless_components,
+        )
+    return (
+        find_simplification(search_code, max_paths),
+        input_components,
+        after_removal,
+        pd_simplification,
+        search_components,
+    )
 
 
 def print_text_result(
     result: SimplificationResult,
     input_components: ComponentAnalysis,
     after_removal_components: Optional[ComponentAnalysis] = None,
+    pd_simplification: Optional[PDSimplificationResult] = None,
+    search_components: Optional[ComponentAnalysis] = None,
 ) -> None:
     print(f"simplification_found: {'yes' if result.found else 'no'}")
     print(f"input_components_with_crossings: {input_components.components_with_crossings}")
@@ -859,6 +1181,23 @@ def print_text_result(
             f"{after_removal_components.crossingless_components}"
         )
         print(f"after_removal_total_components: {after_removal_components.total_components}")
+    if pd_simplification is not None and search_components is not None:
+        print("pd_simplification_enabled: yes")
+        print(
+            "pd_simplification_reidemeister_i_moves: "
+            f"{pd_simplification.reidemeister_i_moves}"
+        )
+        print(
+            "pd_simplification_nugatory_crossing_moves: "
+            f"{pd_simplification.nugatory_crossing_moves}"
+        )
+        print(f"pd_simplification_output_crossings: {len(pd_simplification.code)}")
+        print(
+            "search_components_with_crossings: "
+            f"{search_components.components_with_crossings}"
+        )
+        print(f"search_crossingless_components: {search_components.crossingless_components}")
+        print(f"search_total_components: {search_components.total_components}")
     print(f"tested_red_paths: {result.tested_red_paths}")
     print(f"tested_green_paths: {result.tested_green_paths}")
     if not result.found:
@@ -884,6 +1223,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pd-dir", "-d", action="append", help="read every .txt/.pd file in a directory")
     parser.add_argument("--input", "-i", action="append", help="alias for --pd-file")
     parser.add_argument("--json", action="store_true", help="print JSON output")
+    parser.add_argument("--simplify-pd", dest="simplify_pd", action="store_true", default=True,
+                        help="enable R1 then nugatory PD pre-simplification")
+    parser.add_argument("--no-simplify-pd", "--raw-pd", dest="simplify_pd", action="store_false",
+                        help="disable PD pre-simplification")
     parser.add_argument("--max-paths", type=int, default=100, help="green path cap, or -1 for unlimited")
     parser.add_argument(
         "--known-crossingless-components",
@@ -943,39 +1286,77 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     removed_crossings = parse_removed_crossings(args.remove_crossings)
     show_labels = len(jobs) > 1
     all_found = True
+    had_error = False
 
     if args.json:
         payload = []
         for job in jobs:
-            result, input_components, after_removal = run_job(
-                job,
-                max_paths=args.max_paths,
-                known_crossingless_components=args.known_crossingless_components,
-                removed_crossings=removed_crossings,
-            )
-            all_found = all_found and result.found
-            payload.append(
-                result.to_json(
-                    input_components=input_components,
-                    after_removal_components=after_removal,
-                    label=job.label if show_labels else None,
+            try:
+                (
+                    result,
+                    input_components,
+                    after_removal,
+                    pd_simplification,
+                    search_components,
+                ) = run_job(
+                    job,
+                    max_paths=args.max_paths,
+                    known_crossingless_components=args.known_crossingless_components,
+                    removed_crossings=removed_crossings,
+                    simplify_pd=args.simplify_pd,
                 )
-            )
+                all_found = all_found and result.found
+                payload.append(
+                    result.to_json(
+                        input_components=input_components,
+                        after_removal_components=after_removal,
+                        pd_simplification=pd_simplification,
+                        search_components=search_components,
+                        label=job.label if show_labels else None,
+                    )
+                )
+            except Exception as exc:
+                all_found = False
+                had_error = True
+                item: Dict[str, object] = {"error": str(exc)}
+                if show_labels:
+                    item["label"] = job.label
+                payload.append(item)
         print(json.dumps(payload if show_labels else payload[0], indent=2))
     else:
         for index, job in enumerate(jobs):
-            result, input_components, after_removal = run_job(
-                job,
-                max_paths=args.max_paths,
-                known_crossingless_components=args.known_crossingless_components,
-                removed_crossings=removed_crossings,
-            )
-            all_found = all_found and result.found
             if show_labels:
                 print(f"{job.label}:")
-            print_text_result(result, input_components, after_removal)
+            try:
+                (
+                    result,
+                    input_components,
+                    after_removal,
+                    pd_simplification,
+                    search_components,
+                ) = run_job(
+                    job,
+                    max_paths=args.max_paths,
+                    known_crossingless_components=args.known_crossingless_components,
+                    removed_crossings=removed_crossings,
+                    simplify_pd=args.simplify_pd,
+                )
+                all_found = all_found and result.found
+                print_text_result(
+                    result,
+                    input_components,
+                    after_removal,
+                    pd_simplification,
+                    search_components,
+                )
+            except Exception as exc:
+                all_found = False
+                had_error = True
+                print(f"error: {exc}")
             if show_labels and index + 1 < len(jobs):
                 print()
+    if had_error:
+        return 2
     return 0 if all_found else 1
 
 

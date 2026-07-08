@@ -1,8 +1,9 @@
 # Benchmarking
 
-The benchmark harness compares the C++ executable and the refactored Python
-prototype on the same PD-code inputs. It records wall-clock time and peak RSS
-for each process, then produces CSV, JSON, and a matplotlib-style bar chart.
+The benchmark harness compares the C++ executable, the refactored Python
+prototype, and the source-embedded Python C++ interface on the same PD-code
+inputs. It records wall-clock time and peak RSS for each process, then
+produces CSV, JSON, and a matplotlib-style bar chart.
 
 ## Dataset
 
@@ -12,7 +13,7 @@ PD notation and standard knot families. The default repository benchmark does
 not download those full tables: the complete external data is larger than this
 project needs, and network-dependent benchmarks are hard to reproduce. Instead,
 `tools/benchmark_dataset.py` defines a deterministic, lightweight dataset with
-standard seed diagrams and generated variants.
+standard seed diagrams, generated variants, and ten random corpus samples.
 
 | Case | Family | Crossings | Why It Is Included |
 | --- | --- | ---: | --- |
@@ -28,6 +29,14 @@ standard seed diagrams and generated variants.
 The inflated cases preserve the underlying knot type because each added
 crossing is introduced by a reverse type-I Reidemeister move. The fixed seeds
 make the generated PD codes stable across platforms.
+
+The ten `zip_random_*` cases are sampled from the local
+`tests/pd_code.zip` corpus supplied during development. The zip itself is
+ignored and is not committed. The committed fixture
+`tests/benchmark_random_pd_codes.txt` stores the sampled PD codes so the
+benchmark remains reproducible without the original archive. The sample uses
+seed `20260708` and source files with at most 150 crossings; the resulting
+cases span 120 to 150 crossings.
 
 ## Running
 
@@ -46,32 +55,72 @@ python tools/package.py build
 
 ```sh
 .\.venv\Scripts\python tools\benchmark_cpp_python.py ^
+  --suite original ^
   --repeat 3 ^
-  --plot docs\assets\benchmark_cpp_python.png ^
-  --summary-csv docs\assets\benchmark_summary.csv ^
-  --raw-csv docs\assets\benchmark_raw.csv ^
-  --json docs\assets\benchmark_results.json
+  --interface-cxx C:\path\to\g++.exe ^
+  --plot docs\assets\benchmark_original_cpp_python.png ^
+  --summary-csv docs\assets\benchmark_original_summary.csv ^
+  --raw-csv docs\assets\benchmark_original_raw.csv ^
+  --json docs\assets\benchmark_original_results.json
+```
+
+Run the zip-random large-case suite separately:
+
+```sh
+.\.venv\Scripts\python tools\benchmark_cpp_python.py ^
+  --suite random ^
+  --repeat 3 ^
+  --interface-cxx C:\path\to\g++.exe ^
+  --plot docs\assets\benchmark_random_cpp_python.png ^
+  --summary-csv docs\assets\benchmark_random_summary.csv ^
+  --raw-csv docs\assets\benchmark_random_raw.csv ^
+  --json docs\assets\benchmark_random_results.json
 ```
 
 On Linux and macOS, use `.venv/bin/python` and shell line continuations with
 `\` instead of `^`.
 
+The Python C++ interface compiles and caches a dynamic library through
+`cpp-simple-interface`. That cache is warmed before measurements begin, so the
+chart reports normal cached `ctypes` calls rather than first-use compilation
+time.
+
+Each measurement repeat writes the selected cases to one temporary multi-line
+PD-code file, then starts each engine once to process the whole file. The chart
+reports average time per PD code and peak RSS for the whole batch.
+
+All three engines run the same default preprocessing pipeline before the
+mid-simplification search: R1-move removal followed by nugatory-crossing
+removal. The Python prototype implements this preprocessing in Python, while
+the Python C++ interface reuses the C++ dynamic library.
+
 ## Local Results
 
-The committed chart was generated on the local Windows development machine
+The committed charts were generated on the local Windows development machine
 with a MinGW `g++ -O3 -DNDEBUG` C++ executable, `max_paths=100`, and three
-repeats per case and engine.
+repeats per suite and engine.
 
-![C++ and Python benchmark bar chart](assets/benchmark_cpp_python.png)
+Original lightweight suite:
 
-Aggregate arithmetic means over the eight benchmark cases:
+![Original benchmark bar chart comparing C++ CLI, Python C++ interface, and Python](assets/benchmark_original_cpp_python.png)
 
-| Engine | Average Time (s) | Average Peak RSS (MiB) |
+| Engine | Average Time Per PD Code (s) | Average Peak RSS (MiB) |
 | --- | ---: | ---: |
-| C++ | 0.181460 | 5.447 |
-| Python | 4.147811 | 21.897 |
+| C++ CLI | 0.182968 | 5.910 |
+| Python C++ interface | 0.150219 | 30.138 |
+| Python | 4.106636 | 23.831 |
 
-In this run, the C++ executable was `22.9x` faster on average, while the Python
-prototype used `4.0x` the average peak RSS. Per-case averages are stored in
-[`docs/assets/benchmark_summary.csv`](assets/benchmark_summary.csv), and raw
-measurements are stored in [`docs/assets/benchmark_raw.csv`](assets/benchmark_raw.csv).
+Zip-random large-case suite:
+
+![Zip-random benchmark bar chart comparing C++ CLI, Python C++ interface, and Python](assets/benchmark_random_cpp_python.png)
+
+| Engine | Average Time Per PD Code (s) | Average Peak RSS (MiB) |
+| --- | ---: | ---: |
+| C++ CLI | 0.206798 | 6.077 |
+| Python C++ interface | 0.209011 | 30.418 |
+| Python | 0.396606 | 24.542 |
+
+Summary CSV files are stored in
+[`docs/assets/benchmark_original_summary.csv`](assets/benchmark_original_summary.csv)
+and [`docs/assets/benchmark_random_summary.csv`](assets/benchmark_random_summary.csv).
+Raw measurements are stored in the matching `*_raw.csv` files.

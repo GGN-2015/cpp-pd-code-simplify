@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Benchmark runtime and peak RSS of the C++ and Python simplifiers."""
+"""Benchmark runtime and peak RSS of the C++ CLI, Python prototype, and interface."""
 
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -17,10 +19,18 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import psutil
 
-from benchmark_dataset import BENCHMARK_CASES, BenchmarkCase, case_names, cases_by_name
+from benchmark_dataset import (
+    BENCHMARK_CASES,
+    ORIGINAL_BENCHMARK_CASES,
+    RANDOM_BENCHMARK_CASES,
+    BenchmarkCase,
+    case_names,
+    cases_by_name,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = sys.executable
+INTERFACE_ROOT = ROOT / "python_project" / "cpp-pd-code-simplify-interface"
 
 
 RawRow = Dict[str, object]
@@ -59,47 +69,96 @@ def rss_tree(process: psutil.Process) -> int:
     return total
 
 
-def run_peak(command: List[str], sample_interval: float = 0.01) -> Tuple[float, float, int]:
+def run_peak(
+    command: List[str],
+    sample_interval: float = 0.01,
+    env: Optional[Mapping[str, str]] = None,
+) -> Tuple[float, float, int]:
     start = time.perf_counter()
     proc = psutil.Popen(
         command,
         cwd=str(ROOT),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         text=True,
+        env=env,
     )
     peak = rss_tree(proc)
     while proc.poll() is None:
         peak = max(peak, rss_tree(proc))
         time.sleep(sample_interval)
     peak = max(peak, rss_tree(proc))
-    stdout, stderr = proc.communicate()
+    proc.wait()
     elapsed = time.perf_counter() - start
     if proc.returncode not in (0, 1):
         raise RuntimeError(
-            f"command failed ({proc.returncode}): {' '.join(command)}\n{stderr}\n{stdout}"
+            f"command failed ({proc.returncode}): {' '.join(command)}"
         )
     return elapsed, peak / (1024 * 1024), proc.returncode
 
 
-def commands_for_case(cpp_exe: str, case: BenchmarkCase, max_paths: int) -> Mapping[str, List[str]]:
+def interface_env(interface_cxx: Optional[str] = None) -> Dict[str, str]:
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(INTERFACE_ROOT) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        "CPP_PD_CODE_SIMPLIFY_INTERFACE_CACHE_DIR": str(ROOT / ".cache" / "benchmark-interface"),
+    }
+    if interface_cxx:
+        env["CXX"] = interface_cxx
+    return env
+
+
+def warm_interface_cache(sample_interval: float, interface_cxx: Optional[str]) -> None:
+    command = [
+        PYTHON,
+        "-c",
+        "import cpp_pd_code_simplify_interface as s; print(s.get_simplifier_library())",
+    ]
+    run_peak(command, sample_interval, env=interface_env(interface_cxx))
+
+
+def write_batch_file(cases: Sequence[BenchmarkCase]) -> Path:
+    handle = tempfile.NamedTemporaryFile("w", suffix=".pd", encoding="utf-8", delete=False)
+    with handle:
+        for case in cases:
+            handle.write(f"{case.name}: {case.pd_text}\n")
+    return Path(handle.name)
+
+
+def commands_for_batch(cpp_exe: str, pd_file: Path, max_paths: int) -> Mapping[str, List[str]]:
     return {
-        "cpp": [cpp_exe, "--json", "--pd-code", case.pd_text, "--max-paths", str(max_paths)],
+        "cpp": [cpp_exe, "--json", "--pd-file", str(pd_file), "--max-paths", str(max_paths)],
         "python": [
             PYTHON,
             str(ROOT / "mid_simplify_v5.py"),
             "--json",
-            "--pd-code",
-            case.pd_text,
+            "--pd-file",
+            str(pd_file),
+            "--max-paths",
+            str(max_paths),
+        ],
+        "interface": [
+            PYTHON,
+            "-m",
+            "cpp_pd_code_simplify_interface",
+            "--pd-file",
+            str(pd_file),
             "--max-paths",
             str(max_paths),
         ],
     }
 
 
-def select_cases(names: Optional[Sequence[str]]) -> List[BenchmarkCase]:
+SUITES: Mapping[str, Sequence[BenchmarkCase]] = {
+    "all": BENCHMARK_CASES,
+    "original": ORIGINAL_BENCHMARK_CASES,
+    "random": RANDOM_BENCHMARK_CASES,
+}
+
+
+def select_cases(names: Optional[Sequence[str]], suite: str) -> List[BenchmarkCase]:
     if not names:
-        return list(BENCHMARK_CASES)
+        return list(SUITES[suite])
     lookup = cases_by_name()
     return [lookup[name] for name in names]
 
@@ -110,49 +169,64 @@ def run_benchmark(
     max_paths: int,
     repeat: int,
     sample_interval: float,
+    interface_cxx: Optional[str] = None,
 ) -> List[RawRow]:
     rows: List[RawRow] = []
-    for case in cases:
-        commands = commands_for_case(cpp_exe, case, max_paths)
+    total_crossings = sum(case.crossings for case in cases)
+    warm_interface_cache(sample_interval, interface_cxx)
+    pd_file = write_batch_file(cases)
+    try:
+        commands = commands_for_batch(cpp_exe, pd_file, max_paths)
         for repeat_index in range(1, repeat + 1):
-            for engine in ("cpp", "python"):
-                elapsed, peak_mib, return_code = run_peak(commands[engine], sample_interval)
+            for engine in ("cpp", "interface", "python"):
+                env = interface_env(interface_cxx) if engine == "interface" else None
+                elapsed, peak_mib, return_code = run_peak(commands[engine], sample_interval, env=env)
                 row: RawRow = {
-                    "case": case.name,
-                    "family": case.family,
-                    "crossings": case.crossings,
+                    "case": "batch",
+                    "family": "mixed",
+                    "crossings": total_crossings,
+                    "case_count": len(cases),
                     "engine": engine,
                     "repeat": repeat_index,
                     "time_seconds": elapsed,
+                    "avg_time_per_case_seconds": elapsed / len(cases),
                     "peak_rss_mib": peak_mib,
                     "return_code": return_code,
                 }
                 rows.append(row)
                 print(
-                    f"{case.name:20s} {engine:6s} repeat={repeat_index:2d} "
-                    f"time={elapsed:8.3f}s peak_rss={peak_mib:8.2f} MiB "
+                    f"batch[{len(cases):2d}] {engine:9s} repeat={repeat_index:2d} "
+                    f"time={elapsed:8.3f}s per_case={elapsed / len(cases):8.4f}s "
+                    f"peak_rss={peak_mib:8.2f} MiB "
                     f"return={return_code}"
                 )
+    finally:
+        pd_file.unlink(missing_ok=True)
     return rows
 
 
 def summarize_rows(rows: Iterable[RawRow]) -> List[SummaryRow]:
-    grouped: Dict[Tuple[str, str], List[RawRow]] = defaultdict(list)
+    grouped: Dict[str, List[RawRow]] = defaultdict(list)
     for row in rows:
-        grouped[(str(row["case"]), str(row["engine"]))].append(row)
+        grouped[str(row["engine"])].append(row)
 
     summary: List[SummaryRow] = []
-    for (case_name, engine), values in sorted(grouped.items()):
+    engine_order = {"cpp": 0, "interface": 1, "python": 2}
+    for engine, values in sorted(grouped.items(), key=lambda item: engine_order.get(item[0], 99)):
         first = values[0]
         return_codes = sorted({int(row["return_code"]) for row in values})
         summary.append(
             {
-                "case": case_name,
+                "case": first["case"],
                 "family": first["family"],
                 "crossings": first["crossings"],
+                "case_count": first["case_count"],
                 "engine": engine,
                 "runs": len(values),
                 "avg_time_seconds": mean(float(row["time_seconds"]) for row in values),
+                "avg_time_per_case_seconds": mean(
+                    float(row["avg_time_per_case_seconds"]) for row in values
+                ),
                 "avg_peak_rss_mib": mean(float(row["peak_rss_mib"]) for row in values),
                 "return_codes": ";".join(str(code) for code in return_codes),
             }
@@ -167,6 +241,7 @@ def aggregate_by_engine(summary_rows: Sequence[SummaryRow]) -> Dict[str, Dict[st
     return {
         engine: {
             "avg_time_seconds": mean(float(row["avg_time_seconds"]) for row in rows),
+            "avg_time_per_case_seconds": mean(float(row["avg_time_per_case_seconds"]) for row in rows),
             "avg_peak_rss_mib": mean(float(row["avg_peak_rss_mib"]) for row in rows),
         }
         for engine, rows in grouped.items()
@@ -193,17 +268,18 @@ def plot_aggregate(
     case_count: int,
     repeat: int,
     max_paths: int,
+    suite: str,
 ) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    engines = ["cpp", "python"]
-    labels = ["C++", "Python"]
-    colors = ["#2563eb", "#f97316"]
+    engines = ["cpp", "interface", "python"]
+    labels = ["C++ CLI", "Python C++ interface", "Python"]
+    colors = ["#2563eb", "#16a34a", "#f97316"]
     metrics = [
-        ("avg_time_seconds", "Average time", "seconds"),
+        ("avg_time_per_case_seconds", "Average time per PD code", "seconds"),
         ("avg_peak_rss_mib", "Average peak RSS", "MiB"),
     ]
 
@@ -235,16 +311,24 @@ def plot_aggregate(
                 color="#111827",
             )
 
-    time_speedup = aggregate["python"]["avg_time_seconds"] / aggregate["cpp"]["avg_time_seconds"]
+    time_speedup = aggregate["python"]["avg_time_per_case_seconds"] / aggregate["cpp"]["avg_time_per_case_seconds"]
+    interface_overhead = (
+        aggregate["interface"]["avg_time_per_case_seconds"] / aggregate["cpp"]["avg_time_per_case_seconds"]
+    )
     rss_ratio = aggregate["python"]["avg_peak_rss_mib"] / aggregate["cpp"]["avg_peak_rss_mib"]
-    fig.suptitle("C++ vs Python PD-Code Simplification Benchmark", fontsize=14, y=0.98)
+    suite_title = {
+        "all": "All Cases",
+        "original": "Original Benchmark",
+        "random": "Zip-Random Large Cases",
+    }.get(suite, suite)
+    fig.suptitle(f"PD-Code Simplification Benchmark: {suite_title}", fontsize=14, y=0.98)
     fig.text(
         0.5,
         0.02,
         (
-            f"Arithmetic mean over {case_count} deterministic cases, {repeat} repeat(s), "
+            f"Single-process batches over {case_count} deterministic cases, {repeat} repeat(s), "
             f"max_paths={max_paths}. C++ is {time_speedup:.1f}x faster; "
-            f"Python uses {rss_ratio:.1f}x peak RSS."
+            f"interface is {interface_overhead:.1f}x C++ time; Python uses {rss_ratio:.1f}x peak RSS."
         ),
         ha="center",
         va="bottom",
@@ -258,20 +342,22 @@ def plot_aggregate(
 
 
 def print_summary(summary: Sequence[SummaryRow], aggregate: Mapping[str, Mapping[str, float]]) -> None:
-    print("\nPer-case averages")
-    print("case,engine,runs,avg_time_seconds,avg_peak_rss_mib,return_codes")
+    print("\nBatch averages")
+    print("case_count,engine,runs,avg_time_seconds,avg_time_per_case_seconds,avg_peak_rss_mib,return_codes")
     for row in summary:
         print(
-            f"{row['case']},{row['engine']},{row['runs']},"
+            f"{row['case_count']},{row['engine']},{row['runs']},"
             f"{float(row['avg_time_seconds']):.6f},"
+            f"{float(row['avg_time_per_case_seconds']):.6f},"
             f"{float(row['avg_peak_rss_mib']):.3f},{row['return_codes']}"
         )
 
     print("\nAggregate averages")
-    print("engine,avg_time_seconds,avg_peak_rss_mib")
-    for engine in ("cpp", "python"):
+    print("engine,avg_time_seconds,avg_time_per_case_seconds,avg_peak_rss_mib")
+    for engine in ("cpp", "interface", "python"):
         print(
             f"{engine},{aggregate[engine]['avg_time_seconds']:.6f},"
+            f"{aggregate[engine]['avg_time_per_case_seconds']:.6f},"
             f"{aggregate[engine]['avg_peak_rss_mib']:.3f}"
         )
 
@@ -281,8 +367,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--cpp-exe", default=None, help="path to pd_simplify executable")
     parser.add_argument("--max-paths", type=int, default=100)
     parser.add_argument("--repeat", type=int, default=3, help="measurement repeats per case and engine")
+    parser.add_argument(
+        "--suite",
+        choices=sorted(SUITES),
+        default="all",
+        help="benchmark suite to run when --case is not given",
+    )
     parser.add_argument("--case", action="append", choices=case_names(), help="case to run; default runs all")
     parser.add_argument("--sample-interval", type=float, default=0.01)
+    parser.add_argument("--interface-cxx", help="compiler used by the Python C++ interface")
     parser.add_argument("--raw-csv", type=Path, help="write raw measurement rows")
     parser.add_argument("--summary-csv", type=Path, help="write per-case average rows")
     parser.add_argument("--json", type=Path, help="write raw, summary, and aggregate results")
@@ -293,8 +386,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise ValueError("--repeat must be positive")
 
     cpp_exe = args.cpp_exe or default_cpp_exe()
-    cases = select_cases(args.case)
-    rows = run_benchmark(cpp_exe, cases, args.max_paths, args.repeat, args.sample_interval)
+    cases = select_cases(args.case, args.suite)
+    if not cases:
+        raise ValueError(f"benchmark suite {args.suite!r} has no cases")
+    rows = run_benchmark(
+        cpp_exe,
+        cases,
+        args.max_paths,
+        args.repeat,
+        args.sample_interval,
+        interface_cxx=args.interface_cxx,
+    )
     summary = summarize_rows(rows)
     aggregate = aggregate_by_engine(summary)
     print_summary(summary, aggregate)
@@ -307,9 +409,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "case",
                 "family",
                 "crossings",
+                "case_count",
                 "engine",
                 "repeat",
                 "time_seconds",
+                "avg_time_per_case_seconds",
                 "peak_rss_mib",
                 "return_code",
             ],
@@ -322,9 +426,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "case",
                 "family",
                 "crossings",
+                "case_count",
                 "engine",
                 "runs",
                 "avg_time_seconds",
+                "avg_time_per_case_seconds",
                 "avg_peak_rss_mib",
                 "return_codes",
             ],
@@ -335,13 +441,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             {
                 "max_paths": args.max_paths,
                 "repeat": args.repeat,
+                "suite": args.suite,
                 "raw": rows,
                 "summary": summary,
                 "aggregate": aggregate,
             },
         )
     if args.plot:
-        plot_aggregate(args.plot, aggregate, len(cases), args.repeat, args.max_paths)
+        plot_aggregate(args.plot, aggregate, len(cases), args.repeat, args.max_paths, args.suite)
     return 0
 
 

@@ -7,7 +7,8 @@ laptop, but it still covers several input shapes:
 - small prime-knot seeds,
 - a scalable T(2, n) torus-knot family,
 - diagrams inflated by deterministic reverse Reidemeister-I moves, and
-- the historical 31-crossing reference case used by this repository.
+- the historical 31-crossing reference case used by this repository, and
+- ten deterministic random samples extracted from a local PD-code corpus.
 """
 
 from __future__ import annotations
@@ -39,6 +40,8 @@ X[10,51,11,52],X[31,53,32,52],X[41,50,42,51],X[55,3,56,2],
 X[54,9,55,10],X[53,33,54,32],X[3,57,4,56],X[57,5,58,4],
 X[60,17,61,18],X[59,38,60,39],X[58,47,59,48]
 ]"""
+
+RANDOM_FIXTURE = ROOT / "tests" / "benchmark_random_pd_codes.txt"
 
 
 @dataclass(frozen=True)
@@ -125,7 +128,7 @@ def torus_2_odd(n: int) -> PDCode:
     return tuple(crossings)
 
 
-def build_cases() -> Tuple[BenchmarkCase, ...]:
+def build_original_cases() -> Tuple[BenchmarkCase, ...]:
     trefoil = to_pd_code([(1, 5, 2, 4), (3, 1, 4, 6), (5, 3, 6, 2)])
     figure_eight = to_pd_code(
         [(8, 3, 1, 4), (2, 6, 3, 5), (6, 2, 7, 1), (4, 7, 5, 8)]
@@ -135,7 +138,7 @@ def build_cases() -> Tuple[BenchmarkCase, ...]:
     torus_9 = torus_2_odd(9)
     reference_31 = to_pd_code(pysimplify.parse_pd_code(REFERENCE_31))
 
-    return (
+    cases = [
         BenchmarkCase(
             "3_1_trefoil",
             "prime seed",
@@ -184,10 +187,30 @@ def build_cases() -> Tuple[BenchmarkCase, ...]:
             reference_31,
             "Historical 31-crossing reference input bundled with the project.",
         ),
-    )
+    ]
+
+    return tuple(cases)
 
 
-BENCHMARK_CASES = build_cases()
+def load_random_cases() -> Tuple[BenchmarkCase, ...]:
+    cases: List[BenchmarkCase] = []
+    if RANDOM_FIXTURE.exists():
+        for job in pysimplify.read_pd_file(str(RANDOM_FIXTURE)):
+            name = job.label.split(":")[-1]
+            cases.append(
+                BenchmarkCase(
+                    name,
+                    "zip random sample",
+                    to_pd_code(job.code),
+                    "Deterministic random sample from the local pd_code.zip corpus.",
+                )
+            )
+    return tuple(cases)
+
+
+ORIGINAL_BENCHMARK_CASES = build_original_cases()
+RANDOM_BENCHMARK_CASES = load_random_cases()
+BENCHMARK_CASES = ORIGINAL_BENCHMARK_CASES + RANDOM_BENCHMARK_CASES
 
 
 def case_names() -> List[str]:

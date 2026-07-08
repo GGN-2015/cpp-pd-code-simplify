@@ -88,6 +88,13 @@ struct ReidemeisterSimplificationResult {
     int type_ii_moves = 0;
 };
 
+struct PDSimplificationResult {
+    PDCode code;
+    std::size_t crossingless_components = 0;
+    int reidemeister_i_moves = 0;
+    int nugatory_crossing_moves = 0;
+};
+
 struct SimplificationResult {
     bool found = false;
     Direction direction = Direction::Left;
@@ -122,6 +129,10 @@ PDCODE_SIMPLIFY_API RandomInflationResult randomly_increase_crossings(
     const RandomInflationOptions& options = RandomInflationOptions{});
 
 PDCODE_SIMPLIFY_API ReidemeisterSimplificationResult simplify_reidemeister_i_ii(
+    const PDCode& code,
+    std::size_t known_crossingless_components = 0);
+
+PDCODE_SIMPLIFY_API PDSimplificationResult simplify_pd_code(
     const PDCode& code,
     std::size_t known_crossingless_components = 0);
 

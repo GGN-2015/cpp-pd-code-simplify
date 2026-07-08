@@ -107,6 +107,14 @@ void test_crossingless_component_count_after_removal() {
             "a one-crossing kink should simplify to an empty PD code");
     require(simplified_kink.crossingless_components == 1,
             "a removed one-crossing kink should leave one crossingless component");
+
+    const auto pd_simplified_kink = pdcode_simplify::simplify_pd_code(kink);
+    require(pd_simplified_kink.code.empty(),
+            "default PD simplification should remove a one-crossing kink");
+    require(pd_simplified_kink.reidemeister_i_moves == 1,
+            "default PD simplification should count one R1 move");
+    require(pd_simplified_kink.crossingless_components == 1,
+            "default PD simplification should preserve the crossingless kink component");
 }
 
 void test_reidemeister_random_inflate_then_simplify() {

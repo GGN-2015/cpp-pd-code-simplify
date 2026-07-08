@@ -2,7 +2,8 @@
 
 A dependency-free C++14 project for finding mid-simplification witnesses in
 knot and link planar diagram codes. The repository also includes a refactored
-Python prototype for differential testing.
+Python prototype for differential testing. User-facing tools first remove R1
+moves and nugatory crossings, then run the mid-simplification search.
 
 ## Quickstart
 
@@ -33,6 +34,23 @@ Run the Python prototype:
 python mid_simplify_v5.py --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 ```
 
+Install and use the Python C++ interface package:
+
+```sh
+pip install cpp-pd-code-simplify-interface
+python -m cpp_pd_code_simplify_interface "PD[]"
+```
+
+The package compiles a cached local dynamic library on first use, so a C++14
+compiler must be available. From Python:
+
+```python
+import cpp_pd_code_simplify_interface as simplify
+
+result = simplify.simplify("PD[]")
+print(result["input_components"]["total_components"])
+```
+
 Run C++/Python differential tests:
 
 ```sh
@@ -46,7 +64,13 @@ On Linux and macOS, use `.venv/bin/python` instead of
 
 ## Benchmark Snapshot
 
-![C++ and Python benchmark bar chart](docs/assets/benchmark_cpp_python.png)
+Original lightweight benchmark:
+
+![Original benchmark bar chart comparing C++ CLI, Python C++ interface, and Python](docs/assets/benchmark_original_cpp_python.png)
+
+Zip-random large-case benchmark:
+
+![Zip-random benchmark bar chart comparing C++ CLI, Python C++ interface, and Python](docs/assets/benchmark_random_cpp_python.png)
 
 This local run uses the deterministic benchmark set documented in
 [Benchmarking](docs/benchmarking.md).
@@ -55,6 +79,7 @@ This local run uses the deterministic benchmark set documented in
 
 - [Command-line interface](docs/cli.md)
 - [Python prototype and comparison tools](docs/python.md)
+- [Python C++ interface package](docs/python-interface.md)
 - [Algorithm and correctness](docs/algorithm-and-correctness.md)
 - [Packaging](docs/packaging.md)
 - [Benchmarking](docs/benchmarking.md)

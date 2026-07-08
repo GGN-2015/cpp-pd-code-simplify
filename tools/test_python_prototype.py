@@ -32,7 +32,7 @@ def main() -> int:
     jobs = simplify.parse_pd_document("unknot: PD[]", "case")
     require(len(jobs) == 1, "PD[] document should produce one job")
     require(jobs[0].implied_crossingless_components == 1, "PD[] should imply one crossingless component")
-    result, components, _ = simplify.run_job(jobs[0])
+    result, components, _, _, _ = simplify.run_job(jobs[0])
     require(not result.found, "PD[] should not have a simplification witness")
     require(components.crossingless_components == 1, "PD[] job should keep one crossingless component")
     require(components.total_components == 1, "PD[] job should report one total component")
@@ -40,6 +40,21 @@ def main() -> int:
     kink = simplify.parse_pd_code("PD[X[0,0,1,1]]")
     kink_after = simplify.analyze_components_after_removing_crossings(kink, [0])
     require(kink_after.crossingless_components == 1, "removing a one-crossing kink should leave one component")
+
+    batch = simplify.parse_pd_document(
+        "bad: PD[X[1,2,3,4]]\n"
+        "good: PD[]\n",
+        "case",
+    )
+    require(len(batch) == 2, "batch parser should keep both invalid and valid jobs")
+    try:
+        simplify.run_job(batch[0])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid batch job should report an isolated error")
+    _, good_components, _, _, _ = simplify.run_job(batch[1])
+    require(good_components.crossingless_components == 1, "valid job after an invalid one should still run")
 
     print("Python prototype tests passed")
     return 0
