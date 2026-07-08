@@ -76,19 +76,13 @@ Zip-random large-case benchmark:
 
 ![Zip-random benchmark bar chart comparing C++ CLI, Python C++ interface, and Python](docs/assets/benchmark_random_cpp_python.png)
 
-C++ heuristic versus brute-force search on the zip-random large cases:
-
-![C++ heuristic versus brute-force green-path search](docs/assets/heuristic_vs_bruteforce_random.png)
-
 This local run uses the deterministic benchmark set documented in
 [Benchmarking](docs/benchmarking.md). The lightweight suite is measured with
 `--max-paths -1 --ban-heuristic --reduction-round -1 --max-thread 16`. The
 large zip-random throughput chart uses the first five active zip-random cases
 with `--max-paths -1 --reduction-round -1 --max-thread 16`; the benchmark
 checks C++ CLI, Python C++ interface, and Python outputs for exact JSON
-agreement in the same run that measures time and peak RSS. The C++-only
-heuristic chart compares default heuristic sampling with exhaustive green-path
-enumeration on the same five large cases.
+agreement in the same run that measures time and peak RSS.
 
 ## Documentation
 

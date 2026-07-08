@@ -113,25 +113,6 @@ mid-simplification search: R1-move removal followed by nugatory-crossing
 removal. The Python prototype implements this preprocessing in Python, while
 the Python C++ interface reuses the C++ dynamic library.
 
-The C++ heuristic-vs-brute-force comparison is separate from the three-engine
-benchmark and runs only on the five active zip-random large cases:
-
-```sh
-.\.venv\Scripts\python tools\benchmark_cpp_heuristic.py ^
-  --repeat 1 ^
-  --reduction-round -1 ^
-  --max-thread 16 ^
-  --plot docs\assets\heuristic_vs_bruteforce_random.png ^
-  --summary-csv docs\assets\heuristic_vs_bruteforce_random_summary.csv ^
-  --raw-csv docs\assets\heuristic_vs_bruteforce_random_raw.csv ^
-  --json docs\assets\heuristic_vs_bruteforce_random_results.json
-```
-
-The reduction metric for that chart is actual crossing reduction after the
-configured reduction loop finishes, divided by the original crossing count.
-Timeouts are supported by the tool and are recorded as timed-out rows instead
-of aborting the benchmark, but the committed run below did not use a timeout.
-
 ## Local Results
 
 The committed charts were generated on the local Windows development machine
@@ -165,21 +146,3 @@ Summary CSV files are stored in
 [`docs/assets/benchmark_original_summary.csv`](assets/benchmark_original_summary.csv)
 and [`docs/assets/benchmark_random_summary.csv`](assets/benchmark_random_summary.csv).
 Raw measurements are stored in the matching `*_raw.csv` files.
-
-C++ heuristic-vs-brute-force comparison on the five active zip-random
-large-case suite:
-
-![C++ heuristic versus brute-force green-path search](assets/heuristic_vs_bruteforce_random.png)
-
-| Mode | Average Time Per PD Code (s) | Reduction / Original Crossings (%) |
-| --- | ---: | ---: |
-| Heuristic | 107.205879 | 87.500 |
-| Brute force | 102.876157 | 86.295 |
-
-In this strict run the heuristic found slightly more total reduction, while
-brute-force enumeration was slightly faster on average. The largest case
-(`zip_random_03`) dominated both rows; raw per-case timings and path counts are
-stored in the matching raw CSV.
-
-The summary CSV is stored in
-[`docs/assets/heuristic_vs_bruteforce_random_summary.csv`](assets/heuristic_vs_bruteforce_random_summary.csv).

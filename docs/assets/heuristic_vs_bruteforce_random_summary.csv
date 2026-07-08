@@ -1,3 +1,0 @@
-mode,runs,case_count,avg_time_seconds,total_time_seconds,avg_reduction_percent,total_reduction_percent,avg_reduction_crossings,avg_tested_green_paths,found_count,timeout_count
-heuristic,5,5,107.20587922004052,536.0293961002026,86.39521546623916,87.5,116.2,1739758.6,5,0
-bruteforce,5,5,102.87615685998462,514.3807842999231,85.27627962899348,86.29518072289157,114.6,1319365.2,5,0
