@@ -58,8 +58,8 @@ print(result["final_pd_code"])
 
 All final `final_pd_code` strings are normalized for display: each crossing is
 written from the under-incoming edge, labels are renumbered along oriented
-components from `1`, and the simplification algorithms keep their internal
-numbering unchanged.
+components from `1`, crossing rows are sorted lexicographically, and the
+simplification algorithms keep their internal numbering unchanged.
 
 Run C++/Python differential tests:
 

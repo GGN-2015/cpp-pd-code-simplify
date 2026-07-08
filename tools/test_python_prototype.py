@@ -42,6 +42,15 @@ def main() -> int:
         "final Python text formatter should be one-based",
     )
 
+    orientation_repair = simplify.parse_pd_code(
+        "PD[X[1,6,2,7],X[9,4,10,5],X[8,1,7,10],X[6,3,5,2],X[4,9,3,8]]"
+    )
+    require(
+        simplify.format_final_pd_code(orientation_repair)
+        == "PD[X[1,6,2,7],X[3,8,4,9],X[5,2,6,3],X[7,10,8,1],X[9,4,10,5]]",
+        "final Python formatter should repair local crossing orientation and sort rows",
+    )
+
     after = simplify.analyze_components_after_removing_crossings(trefoil, [0, 1, 2])
     require(after.components_with_crossings == 0, "removed trefoil should have no crossing-bearing components")
     require(after.crossingless_components == 1, "removed trefoil should preserve one crossingless component")

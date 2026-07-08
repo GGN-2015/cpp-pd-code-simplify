@@ -18,6 +18,9 @@ import cpp_pd_code_simplify_interface.main as interface_main  # noqa: E402
 
 TREFOIL = "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 ZERO_BASED_TREFOIL = "PD[X[0,4,1,3],X[2,0,3,5],X[4,2,5,1]]"
+ORIENTATION_REPAIR = (
+    "PD[X[1,6,2,7],X[9,4,10,5],X[8,1,7,10],X[6,3,5,2],X[4,9,3,8]]"
+)
 
 
 def preferred_cxx() -> str | None:
@@ -75,6 +78,12 @@ def main() -> int:
 
     zero_based_trefoil = interface.simplify(ZERO_BASED_TREFOIL, reduction_round=0)
     assert zero_based_trefoil["final_pd_code"] == TREFOIL
+
+    orientation_repair = interface.simplify(ORIENTATION_REPAIR, reduction_round=0)
+    assert (
+        orientation_repair["final_pd_code"]
+        == "PD[X[1,6,2,7],X[3,8,4,9],X[5,2,6,3],X[7,10,8,1],X[9,4,10,5]]"
+    )
 
     unknot = interface.simplify("PD[]")
     assert unknot["input_components"]["crossingless_components"] == 1

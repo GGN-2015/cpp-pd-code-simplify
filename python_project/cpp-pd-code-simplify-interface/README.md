@@ -40,9 +40,10 @@ print(result["final_pd_code"])
 ```
 
 Returned `final_pd_code` strings are normalized for display: each crossing is
-written from the under-incoming edge and labels are renumbered along oriented
-components from `1`. This is applied only at the final JSON boundary; the C++
-backend keeps its internal numbering unchanged while simplifying.
+written from the under-incoming edge, labels are renumbered along oriented
+components from `1`, and crossing rows are sorted lexicographically. This is
+applied only at the final JSON boundary; the C++ backend keeps its internal
+numbering unchanged while simplifying.
 
 The default `max_paths=-1` uses deterministic heuristic green-path sampling in
 the C++ backend. Use `ban_heuristic=True` to request exhaustive green-path

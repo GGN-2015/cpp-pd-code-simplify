@@ -63,9 +63,9 @@ def compiler_path(cxx: str) -> Optional[Path]:
     return None
 
 
-def run(command: Sequence[str]) -> None:
+def run(command: Sequence[str], env: Optional[dict[str, str]] = None) -> None:
     print("+ " + " ".join(str(part) for part in command), flush=True)
-    subprocess.run([str(part) for part in command], cwd=str(ROOT), check=True)
+    subprocess.run([str(part) for part in command], cwd=str(ROOT), env=env, check=True)
 
 
 def config_flags(config: str, msvc: bool) -> List[str]:
@@ -208,9 +208,16 @@ def build_shared_library(args: argparse.Namespace) -> Path:
 
 
 def run_tests(args: argparse.Namespace) -> None:
-    build_executable(args)
+    executable = build_executable(args)
     test_app = build_tests(args)
     run([str(test_app)])
+    env = os.environ.copy()
+    env["PD_SIMPLIFY_EXECUTABLE"] = str(executable)
+    env.setdefault("CXX", args.cxx)
+    compiler = compiler_path(args.cxx)
+    if compiler is not None:
+        env["PATH"] = str(compiler.parent) + os.pathsep + env.get("PATH", "")
+    run([sys.executable, "tools/test_cpp_output_diagram_sanity.py"], env=env)
 
 
 def copy_tree(source: Path, destination: Path) -> None:

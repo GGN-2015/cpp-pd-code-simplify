@@ -510,8 +510,10 @@ std::vector<std::vector<int>> raw_faces_from_pd_code(const PDCode& code) {
 struct Diagram {
     PDCode code;
     std::vector<CrossingState> crossings;
+    std::vector<int> rotations;
 
-    explicit Diagram(PDCode input) : code(std::move(input)), crossings(code.size()) {
+    explicit Diagram(PDCode input)
+        : code(std::move(input)), crossings(code.size()), rotations(code.size(), 0) {
         build_adjacency();
         auto starts = component_starts_from_pd();
         orient_crossings(starts);
@@ -531,6 +533,10 @@ struct Diagram {
 
     Endpoint rotate_endpoint(const Endpoint& endpoint, int offset) const {
         return Endpoint{endpoint.crossing, positive_mod(endpoint.strand + offset, 4)};
+    }
+
+    int label_at(int crossing, int strand) const {
+        return code.at(crossing).at(positive_mod(strand + rotations.at(crossing), 4));
     }
 
     std::vector<Endpoint> crossing_entries() const {
@@ -715,6 +721,7 @@ private:
 
     void rotate_crossing_180(int crossing) {
         auto old_adjacent = crossings[crossing].adjacent;
+        rotations[crossing] = positive_mod(rotations[crossing] + 2, 4);
         bool old_directions[4][4]{};
         for (int a = 0; a < 4; ++a) {
             for (int b = 0; b < 4; ++b) {
@@ -1878,14 +1885,9 @@ std::string format_final_pd_code(const PDCode& code) {
     std::set<int> labels;
     std::map<int, int> next_label;
 
-    auto label_at = [&](int crossing, int strand) {
-        const Endpoint other = diagram.crossings[crossing].adjacent[strand];
-        return diagram.code[other.crossing][other.strand];
-    };
-
     for (int crossing = 0; crossing < static_cast<int>(code.size()); ++crossing) {
         for (int strand = 0; strand < 4; ++strand) {
-            const int label = label_at(crossing, strand);
+            const int label = diagram.label_at(crossing, strand);
             oriented[crossing][strand] = label;
             labels.insert(label);
         }
@@ -1898,8 +1900,8 @@ std::string format_final_pd_code(const PDCode& code) {
                 if (!diagram.crossings[crossing].directions[tail][head]) {
                     continue;
                 }
-                const int in_label = label_at(crossing, tail);
-                const int out_label = label_at(crossing, head);
+                const int in_label = diagram.label_at(crossing, tail);
+                const int out_label = diagram.label_at(crossing, head);
                 const auto inserted = next_label.insert(std::make_pair(in_label, out_label));
                 if (!inserted.second && inserted.first->second != out_label) {
                     throw std::invalid_argument("Final PD component orientation is inconsistent");
@@ -1934,6 +1936,7 @@ std::string format_final_pd_code(const PDCode& code) {
             label = relabel.at(label);
         }
     }
+    std::sort(oriented.begin(), oriented.end());
     return format_pd_code(oriented);
 }
 

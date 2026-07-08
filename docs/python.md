@@ -33,8 +33,8 @@ brute-force check when heuristic mode can no longer find a path. Use
 `--verbose` to print timestamped progress logs to stderr. Verbose log lines
 use local wall-clock time in `YYYY-MM-DD HH:MM:SS` format. Final output
 PD-code strings are normalized for display: each crossing is written from the
-under-incoming edge and labels are renumbered along oriented components from
-`1`.
+under-incoming edge, labels are renumbered along oriented components from
+`1`, and crossing rows are sorted lexicographically.
 
 Report crossingless components after removing all trefoil crossings:
 

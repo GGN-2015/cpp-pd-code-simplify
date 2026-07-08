@@ -272,6 +272,7 @@ class Diagram:
             [[False for _ in range(4)] for _ in range(4)] for _ in self.code
         ]
         self.signs: List[int] = [0 for _ in self.code]
+        self.rotation_offsets: List[int] = [0 for _ in self.code]
         self._build_adjacency()
         starts = self._component_starts_from_pd()
         self._orient_crossings(starts)
@@ -288,6 +289,9 @@ class Diagram:
     @staticmethod
     def rotate_endpoint(endpoint: Endpoint, offset: int) -> Endpoint:
         return Endpoint(endpoint.crossing, (endpoint.strand + offset) % 4)
+
+    def label_at(self, crossing: int, strand: int) -> int:
+        return self.code[crossing][(strand + self.rotation_offsets[crossing]) % 4]
 
     def crossing_entries(self) -> List[Endpoint]:
         entries: List[Endpoint] = []
@@ -409,6 +413,7 @@ class Diagram:
         old_adjacent = list(self.adjacent[crossing])
         old_directions = [row[:] for row in self.directions[crossing]]
         self.directions[crossing] = [[False for _ in range(4)] for _ in range(4)]
+        self.rotation_offsets[crossing] = (self.rotation_offsets[crossing] + 2) % 4
 
         for i in range(4):
             other = old_adjacent[(i + 2) % 4]
@@ -430,16 +435,12 @@ def format_final_pd_code(code: PDCode) -> str:
 
     diagram = Diagram(code)
 
-    def label_at(crossing: int, strand: int) -> int:
-        other = diagram.adjacent[crossing][strand]
-        return diagram.code[other.crossing][other.strand]
-
     oriented: List[Tuple[int, int, int, int]] = []
     labels: Set[int] = set()
     next_label: Dict[int, int] = {}
 
     for crossing in range(len(code)):
-        row = tuple(label_at(crossing, strand) for strand in range(4))
+        row = tuple(diagram.label_at(crossing, strand) for strand in range(4))
         oriented.append(row)  # type: ignore[arg-type]
         labels.update(row)
 
@@ -449,8 +450,8 @@ def format_final_pd_code(code: PDCode) -> str:
             for head in range(4):
                 if not diagram.directions[crossing][tail][head]:
                     continue
-                in_label = label_at(crossing, tail)
-                out_label = label_at(crossing, head)
+                in_label = diagram.label_at(crossing, tail)
+                out_label = diagram.label_at(crossing, head)
                 previous = next_label.get(in_label)
                 if previous is not None and previous != out_label:
                     raise ValueError("Final PD component orientation is inconsistent")
@@ -475,6 +476,7 @@ def format_final_pd_code(code: PDCode) -> str:
         tuple(relabel[label] for label in crossing)
         for crossing in oriented
     ]
+    canonical.sort()
     return format_pd_code(canonical)
 
 

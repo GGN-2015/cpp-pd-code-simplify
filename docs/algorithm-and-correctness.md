@@ -66,6 +66,8 @@ form:
   order used by the rest of the library;
 - labels are then renumbered by walking the directed components, processing
   components in increasing old-label order and assigning labels from `1`.
+- crossing rows are sorted lexicographically after relabeling, matching the
+  stable order used by diagram sanity round trips.
 
 This is only a relabeling and local cyclic reindexing of crossing endpoints.
 It does not change the pairing of PD labels, crossing signs, component count,

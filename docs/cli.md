@@ -56,8 +56,9 @@ pd_simplify --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 
 The final `final_pd_code` string printed by text and JSON modes is normalized
 for display: each crossing is written from the under-incoming edge, labels are
-renumbered along oriented components from `1`, and the simplification
-algorithm keeps its internal numbering unchanged.
+renumbered along oriented components from `1`, crossing rows are sorted
+lexicographically, and the simplification algorithm keeps its internal
+numbering unchanged.
 
 Read one input file:
 

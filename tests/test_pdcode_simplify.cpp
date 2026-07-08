@@ -29,6 +29,13 @@ void test_parser() {
     require(cppkh_style.size() == 3, "parser should accept standard PD[...] input");
     require(cppkh_style[0][0] == 1 && cppkh_style[2][3] == 2,
             "parser should preserve standard PD[...] labels");
+
+    const auto orientation_repair = pdcode_simplify::parse_pd_code(
+        "PD[X[1,6,2,7],X[9,4,10,5],X[8,1,7,10],X[6,3,5,2],X[4,9,3,8]]");
+    require(
+        pdcode_simplify::format_final_pd_code(orientation_repair) ==
+            "PD[X[1,6,2,7],X[3,8,4,9],X[5,2,6,3],X[7,10,8,1],X[9,4,10,5]]",
+        "final formatter should repair local crossing orientation and sort rows");
 }
 
 void test_empty_code() {
