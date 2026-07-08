@@ -46,14 +46,23 @@ ctest --test-dir build --build-config Release --output-on-failure
 ## Command Line
 
 ```sh
-pd_simplify --max-paths 100 "[(0, 1, 2, 3), (2, 3, 0, 1)]"
+pd_simplify --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 ```
 
-Input may also be read from a file or standard input:
+The CLI follows the same input style as `cppkh`: pass a literal `PD[...]`
+string, a file, or every `.txt` and `.pd` file in a directory.
 
 ```sh
-pd_simplify --input diagram.pd --json
+pd_simplify --pd-file diagram.pd --json
+pd_simplify --pd-dir samples
 ```
+
+`--pd-code` may contain one or more `PD[...]` blocks. Input files may contain
+multiple PD codes, one or more standard `PD[...]` blocks, or labelled lines
+such as `trefoil: PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]`. If no input is
+given, the executable tries to read `PD.txt` from the current directory.
+Python-style crossing lists are still accepted for compatibility. In the CLI,
+standard `PD[]` input is treated as one crossingless unknot component.
 
 Plain PD codes cannot store components with no crossings. If a previous
 operation has already produced such components, pass their count explicitly:

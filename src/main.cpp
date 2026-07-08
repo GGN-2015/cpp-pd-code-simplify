@@ -1,27 +1,44 @@
 #include "pdcode_simplify/pdcode_simplify.hpp"
 
-#include <fstream>
+#include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <iostream>
-#include <iterator>
-#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
 
 namespace {
 
+struct PDJob {
+    std::string label;
+    pdcode_simplify::PDCode code;
+    std::size_t implied_crossingless_components = 0;
+};
+
 void print_help(const char* program) {
     std::cout
-        << "Usage: " << program << " [--max-paths N] [--json] [--input FILE] [PD_CODE]\n"
+        << "Usage: " << program << " [--pd-code CODE] [--pd-file FILE] [--pd-dir DIR] [options]\n"
         << "\n"
         << "Find a mid-simplification witness in a knot or link PD code.\n"
+        << "Inputs follow the cppkh style: standard PD[...] strings, files, or directories.\n"
         << "Use --known-crossingless-components N when the input already has\n"
         << "components that cannot be represented by a PD code.\n"
         << "Use --remove-crossings LIST to report component counts after a\n"
         << "zero-based crossing-removal simulation.\n"
-        << "If PD_CODE and --input are omitted, input is read from standard input.\n";
+        << "If no input is given, the CLI tries to read PD.txt from the current directory.\n";
 }
 
 std::string read_file(const std::string& path) {
@@ -34,8 +51,209 @@ std::string read_file(const std::string& path) {
     return buffer.str();
 }
 
-std::string read_stdin() {
-    return std::string(std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>());
+std::string trim(const std::string& value) {
+    const std::size_t first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return "";
+    }
+    const std::size_t last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+std::string remove_ascii_whitespace(const std::string& value) {
+    std::string result;
+    for (char c : value) {
+        if (!std::isspace(static_cast<unsigned char>(c))) {
+            result.push_back(c);
+        }
+    }
+    return result;
+}
+
+bool denotes_crossingless_unknot(const std::string& payload) {
+    const std::string compact = remove_ascii_whitespace(payload);
+    return compact == "PD[]" || compact == "[]";
+}
+
+bool file_exists(const std::string& path) {
+    std::ifstream input(path);
+    return static_cast<bool>(input);
+}
+
+bool is_directory(const std::string& path) {
+#ifdef _WIN32
+    const DWORD attributes = GetFileAttributesA(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+#else
+    struct stat info;
+    return stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+#endif
+}
+
+bool has_pd_extension(const std::string& path) {
+    std::string lower = path;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](char c) {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    });
+    return lower.size() >= 3 &&
+           (lower.substr(lower.size() - 3) == ".pd" ||
+            (lower.size() >= 4 && lower.substr(lower.size() - 4) == ".txt"));
+}
+
+std::vector<std::string> list_input_files(const std::string& directory) {
+    std::vector<std::string> files;
+#ifdef _WIN32
+    std::string search = directory;
+    if (!search.empty() && search.back() != '\\' && search.back() != '/') {
+        search += "\\";
+    }
+    const std::string prefix = search;
+    search += "*";
+    WIN32_FIND_DATAA data;
+    HANDLE handle = FindFirstFileA(search.c_str(), &data);
+    if (handle == INVALID_HANDLE_VALUE) {
+        throw std::runtime_error("Cannot open directory: " + directory);
+    }
+    do {
+        const std::string name = data.cFileName;
+        if (name == "." || name == "..") {
+            continue;
+        }
+        const std::string path = prefix + name;
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 && has_pd_extension(path)) {
+            files.push_back(path);
+        }
+    } while (FindNextFileA(handle, &data));
+    FindClose(handle);
+#else
+    DIR* dir = opendir(directory.c_str());
+    if (dir == nullptr) {
+        throw std::runtime_error("Cannot open directory: " + directory);
+    }
+    while (dirent* entry = readdir(dir)) {
+        const std::string name = entry->d_name;
+        if (name == "." || name == "..") {
+            continue;
+        }
+        std::string path = directory;
+        if (!path.empty() && path.back() != '/') {
+            path += "/";
+        }
+        path += name;
+        if (!is_directory(path) && has_pd_extension(path)) {
+            files.push_back(path);
+        }
+    }
+    closedir(dir);
+#endif
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+std::string label_for_block(const std::string& text, std::size_t block_start, const std::string& label_prefix, int index) {
+    std::size_t line_start = text.rfind('\n', block_start);
+    line_start = line_start == std::string::npos ? 0 : line_start + 1;
+    const std::string before_block = text.substr(line_start, block_start - line_start);
+    const std::size_t colon = before_block.find(':');
+    if (colon != std::string::npos) {
+        const std::string line_label = trim(before_block.substr(0, colon));
+        if (!line_label.empty()) {
+            return label_prefix + ":" + line_label;
+        }
+    }
+
+    if (index == 0) {
+        return label_prefix;
+    }
+    return label_prefix + "#" + std::to_string(index + 1);
+}
+
+std::vector<PDJob> parse_pd_document(const std::string& text, const std::string& label_prefix) {
+    std::vector<PDJob> jobs;
+    std::size_t pos = 0;
+    int index = 0;
+
+    while (true) {
+        const std::size_t start = text.find("PD[", pos);
+        if (start == std::string::npos) {
+            break;
+        }
+
+        int depth = 0;
+        std::size_t end = std::string::npos;
+        for (std::size_t i = start + 2; i < text.size(); ++i) {
+            if (text[i] == '[') {
+                ++depth;
+            } else if (text[i] == ']') {
+                --depth;
+                if (depth == 0) {
+                    end = i;
+                    break;
+                }
+            }
+        }
+        if (end == std::string::npos) {
+            throw std::runtime_error("Unterminated PD[...] block in " + label_prefix);
+        }
+
+        PDJob job;
+        job.label = label_for_block(text, start, label_prefix, index);
+        const std::string block = text.substr(start, end - start + 1);
+        job.code = pdcode_simplify::parse_pd_code(block);
+        job.implied_crossingless_components = denotes_crossingless_unknot(block) ? 1 : 0;
+        jobs.push_back(std::move(job));
+        ++index;
+        pos = end + 1;
+    }
+
+    if (!jobs.empty()) {
+        return jobs;
+    }
+
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        const std::string cleaned = trim(line);
+        if (cleaned.empty()) {
+            continue;
+        }
+
+        std::string payload = cleaned;
+        std::string label = label_prefix;
+        const std::size_t colon = cleaned.find(':');
+        if (colon != std::string::npos) {
+            const std::string line_label = trim(cleaned.substr(0, colon));
+            payload = trim(cleaned.substr(colon + 1));
+            if (!line_label.empty()) {
+                label += ":" + line_label;
+            }
+        } else if (!jobs.empty()) {
+            label += "#" + std::to_string(jobs.size() + 1);
+        }
+
+        const bool has_digit = std::find_if(payload.begin(), payload.end(), [](char c) {
+            return std::isdigit(static_cast<unsigned char>(c)) != 0;
+        }) != payload.end();
+        if (!has_digit && payload.find("PD[]") == std::string::npos && payload != "[]") {
+            continue;
+        }
+
+        PDJob job;
+        job.label = label;
+        job.code = pdcode_simplify::parse_pd_code(payload);
+        job.implied_crossingless_components = denotes_crossingless_unknot(payload) ? 1 : 0;
+        jobs.push_back(std::move(job));
+    }
+
+    return jobs;
+}
+
+std::vector<PDJob> read_pd_file(const std::string& path) {
+    std::vector<PDJob> jobs = parse_pd_document(read_file(path), path);
+    if (jobs.size() == 1) {
+        jobs[0].label = path;
+    }
+    return jobs;
 }
 
 std::vector<int> parse_integer_list(const std::string& text) {
@@ -128,11 +346,42 @@ void print_json_component_counts(const pdcode_simplify::ComponentAnalysis& analy
               << ",\"total_components\":" << analysis.total_components();
 }
 
+std::string json_escape(const std::string& text) {
+    std::ostringstream escaped;
+    for (char c : text) {
+        switch (c) {
+            case '\\':
+                escaped << "\\\\";
+                break;
+            case '"':
+                escaped << "\\\"";
+                break;
+            case '\n':
+                escaped << "\\n";
+                break;
+            case '\r':
+                escaped << "\\r";
+                break;
+            case '\t':
+                escaped << "\\t";
+                break;
+            default:
+                escaped << c;
+                break;
+        }
+    }
+    return escaped.str();
+}
+
 void print_json_result(
     const pdcode_simplify::SimplificationResult& result,
     const pdcode_simplify::ComponentAnalysis& input_components,
-    const pdcode_simplify::ComponentAnalysis* after_removal_components) {
+    const pdcode_simplify::ComponentAnalysis* after_removal_components,
+    const std::string* label = nullptr) {
     std::cout << "{\n";
+    if (label != nullptr) {
+        std::cout << "  \"label\": \"" << json_escape(*label) << "\",\n";
+    }
     std::cout << "  \"simplification_found\": " << (result.found ? "true" : "false") << ",\n";
     std::cout << "  \"input_components\": {";
     print_json_component_counts(input_components);
@@ -190,7 +439,8 @@ int main(int argc, char** argv) {
         std::size_t known_crossingless_components = 0;
         std::vector<int> removed_crossings;
         bool has_removal_simulation = false;
-        std::string input_text;
+        std::vector<std::string> files;
+        std::vector<PDJob> jobs;
         std::vector<std::string> positional;
 
         for (int i = 1; i < argc; ++i) {
@@ -221,52 +471,111 @@ int main(int argc, char** argv) {
                 }
                 removed_crossings = parse_integer_list(argv[++i]);
                 has_removal_simulation = true;
-            } else if (arg == "--input" || arg == "-i") {
+            } else if (arg == "--pd-code" || arg == "-c") {
                 if (i + 1 >= argc) {
-                    throw std::invalid_argument("--input requires a file path");
+                    throw std::invalid_argument("--pd-code requires a PD[...] string");
                 }
-                input_text = read_file(argv[++i]);
+                const std::vector<PDJob> parsed = parse_pd_document(argv[++i], "command-line");
+                jobs.insert(jobs.end(), parsed.begin(), parsed.end());
+            } else if (arg == "--pd-file" || arg == "-f" || arg == "--input" || arg == "-i") {
+                if (i + 1 >= argc) {
+                    throw std::invalid_argument(arg + " requires a file path");
+                }
+                files.push_back(argv[++i]);
+            } else if (arg == "--pd-dir" || arg == "-d") {
+                if (i + 1 >= argc) {
+                    throw std::invalid_argument("--pd-dir requires a directory path");
+                }
+                const std::vector<std::string> directory_files = list_input_files(argv[++i]);
+                files.insert(files.end(), directory_files.begin(), directory_files.end());
             } else {
                 positional.push_back(arg);
             }
         }
 
-        if (input_text.empty()) {
-            if (!positional.empty()) {
-                std::ostringstream joined;
+        if (!positional.empty()) {
+            if (positional.size() == 1 && is_directory(positional.front())) {
+                const std::vector<std::string> directory_files = list_input_files(positional.front());
+                files.insert(files.end(), directory_files.begin(), directory_files.end());
+            } else if (positional.size() == 1 && file_exists(positional.front())) {
+                files.push_back(positional.front());
+            } else {
+                std::ostringstream literal;
                 for (std::size_t i = 0; i < positional.size(); ++i) {
                     if (i != 0) {
-                        joined << ' ';
+                        literal << ' ';
                     }
-                    joined << positional[i];
+                    literal << positional[i];
                 }
-                input_text = joined.str();
-            } else {
-                input_text = read_stdin();
+                const std::vector<PDJob> parsed = parse_pd_document(literal.str(), "command-line");
+                jobs.insert(jobs.end(), parsed.begin(), parsed.end());
             }
         }
 
-        const auto code = pdcode_simplify::parse_pd_code(input_text);
-        const auto input_components = pdcode_simplify::analyze_components(
-            code, known_crossingless_components);
-        pdcode_simplify::ComponentAnalysis after_removal_components;
-        if (has_removal_simulation) {
-            after_removal_components = pdcode_simplify::analyze_components_after_removing_crossings(
-                code, removed_crossings, known_crossingless_components);
+        if (files.empty() && jobs.empty()) {
+            files.push_back("PD.txt");
         }
-        const auto result = pdcode_simplify::find_simplification(code, options);
-        if (json) {
-            print_json_result(
-                result,
-                input_components,
-                has_removal_simulation ? &after_removal_components : nullptr);
-        } else {
-            print_text_result(
-                result,
-                input_components,
-                has_removal_simulation ? &after_removal_components : nullptr);
+
+        for (const std::string& file : files) {
+            const std::vector<PDJob> parsed = read_pd_file(file);
+            jobs.insert(jobs.end(), parsed.begin(), parsed.end());
         }
-        return result.found ? 0 : 1;
+
+        if (jobs.empty()) {
+            throw std::runtime_error("No PD code found");
+        }
+
+        const bool show_labels = jobs.size() > 1;
+        bool all_found = true;
+
+        if (json && jobs.size() > 1) {
+            std::cout << "[\n";
+        }
+
+        for (std::size_t i = 0; i < jobs.size(); ++i) {
+            const std::size_t job_crossingless_components =
+                known_crossingless_components + jobs[i].implied_crossingless_components;
+            const auto input_components = pdcode_simplify::analyze_components(
+                jobs[i].code, job_crossingless_components);
+            pdcode_simplify::ComponentAnalysis after_removal_components;
+            if (has_removal_simulation) {
+                after_removal_components = pdcode_simplify::analyze_components_after_removing_crossings(
+                    jobs[i].code, removed_crossings, job_crossingless_components);
+            }
+            const auto result = pdcode_simplify::find_simplification(jobs[i].code, options);
+            all_found = all_found && result.found;
+
+            if (json) {
+                print_json_result(
+                    result,
+                    input_components,
+                    has_removal_simulation ? &after_removal_components : nullptr,
+                    show_labels ? &jobs[i].label : nullptr);
+                if (jobs.size() > 1 && i + 1 < jobs.size()) {
+                    std::cout << ",";
+                }
+                if (jobs.size() > 1) {
+                    std::cout << "\n";
+                }
+            } else {
+                if (show_labels) {
+                    std::cout << jobs[i].label << ":\n";
+                }
+                print_text_result(
+                    result,
+                    input_components,
+                    has_removal_simulation ? &after_removal_components : nullptr);
+                if (show_labels && i + 1 < jobs.size()) {
+                    std::cout << '\n';
+                }
+            }
+        }
+
+        if (json && jobs.size() > 1) {
+            std::cout << "]\n";
+        }
+
+        return all_found ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
         return 2;

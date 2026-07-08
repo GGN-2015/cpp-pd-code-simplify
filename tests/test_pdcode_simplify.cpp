@@ -17,6 +17,12 @@ void test_parser() {
     const auto code = pdcode_simplify::parse_pd_code("[(0, 1, 2, 3), (2, 3, 0, 1)]");
     require(code.size() == 2, "parser should create two crossings");
     require(code[0][0] == 0 && code[1][3] == 1, "parser should preserve labels");
+
+    const auto cppkh_style = pdcode_simplify::parse_pd_code(
+        "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]");
+    require(cppkh_style.size() == 3, "parser should accept standard PD[...] input");
+    require(cppkh_style[0][0] == 1 && cppkh_style[2][3] == 2,
+            "parser should preserve standard PD[...] labels");
 }
 
 void test_empty_code() {
