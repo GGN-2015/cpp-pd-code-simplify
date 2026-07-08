@@ -56,6 +56,7 @@ def run_cpp(
     *,
     ban_heuristic: bool,
     reduction_round: int,
+    max_thread: int,
     timeout: Optional[float],
     verbose: bool,
 ) -> Tuple[float, int, Mapping[str, object]]:
@@ -68,6 +69,8 @@ def run_cpp(
         "-1",
         "--reduction-round",
         str(reduction_round),
+        "--max-thread",
+        str(max_thread),
     ]
     if verbose:
         command.append("--verbose")
@@ -111,6 +114,7 @@ def benchmark(
     cases: Sequence[BenchmarkCase],
     repeat: int,
     reduction_round: int,
+    max_thread: int,
     timeout: Optional[float],
     verbose: bool,
 ) -> List[RawRow]:
@@ -129,6 +133,7 @@ def benchmark(
                         case,
                         ban_heuristic=ban_heuristic,
                         reduction_round=reduction_round,
+                        max_thread=max_thread,
                         timeout=timeout,
                         verbose=verbose,
                     )
@@ -220,6 +225,7 @@ def plot_summary(
     repeat: int,
     case_count: int,
     reduction_round: int,
+    max_thread: int,
 ) -> None:
     import matplotlib
 
@@ -273,7 +279,8 @@ def plot_summary(
         (
             f"C++ only, max_paths=-1, {case_count} zip-random large cases, "
             f"reduction_round={reduction_round}, {repeat} repeat(s). "
-            f"Brute force took {time_ratio:.1f}x heuristic time."
+            f"max_thread={max_thread}. "
+            f"Brute/heuristic time ratio: {time_ratio:.2f}x."
         ),
         ha="center",
         va="bottom",
@@ -310,6 +317,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--cpp-exe", default=None, help="path to pd_simplify executable")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--reduction-round", type=int, default=-1)
+    parser.add_argument("--max-thread", type=int, default=-1)
     parser.add_argument("--case", action="append", choices=case_names(), help="case to run; default uses random suite")
     parser.add_argument("--timeout", type=float, default=0.0, help="per-run timeout in seconds; 0 disables it")
     parser.add_argument("--verbose", action="store_true", help="forward progress logs from child processes")
@@ -328,7 +336,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     cpp_exe = args.cpp_exe or default_cpp_exe()
     timeout = args.timeout if args.timeout > 0 else None
-    rows = benchmark(cpp_exe, cases, args.repeat, args.reduction_round, timeout, args.verbose)
+    rows = benchmark(
+        cpp_exe,
+        cases,
+        args.repeat,
+        args.reduction_round,
+        args.max_thread,
+        timeout,
+        args.verbose,
+    )
     summary = summarize(rows)
     print_summary(summary)
 
@@ -380,6 +396,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             {
                 "max_paths": -1,
                 "reduction_round": args.reduction_round,
+                "max_thread": args.max_thread,
                 "repeat": args.repeat,
                 "suite": "random",
                 "verbose": args.verbose,
@@ -394,6 +411,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             repeat=args.repeat,
             case_count=len(cases),
             reduction_round=args.reduction_round,
+            max_thread=args.max_thread,
         )
     return 0
 

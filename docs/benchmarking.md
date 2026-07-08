@@ -13,7 +13,7 @@ PD notation and standard knot families. The default repository benchmark does
 not download those full tables: the complete external data is larger than this
 project needs, and network-dependent benchmarks are hard to reproduce. Instead,
 `tools/benchmark_dataset.py` defines a deterministic, lightweight dataset with
-standard seed diagrams, generated variants, and ten random corpus samples.
+standard seed diagrams, generated variants, and stored random corpus samples.
 
 | Case | Family | Crossings | Why It Is Included |
 | --- | --- | ---: | --- |
@@ -30,13 +30,15 @@ The inflated cases preserve the underlying knot type because each added
 crossing is introduced by a reverse type-I Reidemeister move. The fixed seeds
 make the generated PD codes stable across platforms.
 
-The ten `zip_random_*` cases are sampled from the local
+Ten `zip_random_*` cases were sampled from the local
 `tests/pd_code.zip` corpus supplied during development. The zip itself is
 ignored and is not committed. The committed fixture
 `tests/benchmark_random_pd_codes.txt` stores the sampled PD codes so the
 benchmark remains reproducible without the original archive. The sample uses
 seed `20260708` and source files with at most 150 crossings; the resulting
-cases span 120 to 150 crossings.
+cases span 120 to 150 crossings. The active large benchmark intentionally uses
+the first five stored `zip_random_*` cases so strict `--reduction-round -1`
+runs remain reproducible in a practical amount of time.
 
 ## Running
 
@@ -56,9 +58,11 @@ python tools/package.py build
 ```sh
 .\.venv\Scripts\python tools\benchmark_cpp_python.py ^
   --suite original ^
-  --repeat 3 ^
+  --repeat 1 ^
   --max-paths -1 ^
   --ban-heuristic ^
+  --reduction-round -1 ^
+  --max-thread 16 ^
   --interface-cxx C:\path\to\g++.exe ^
   --plot docs\assets\benchmark_original_cpp_python.png ^
   --summary-csv docs\assets\benchmark_original_summary.csv ^
@@ -73,7 +77,8 @@ Run the zip-random large-case suite separately:
   --suite random ^
   --repeat 1 ^
   --max-paths -1 ^
-  --reduction-round 3 ^
+  --reduction-round -1 ^
+  --max-thread 16 ^
   --interface-cxx C:\path\to\g++.exe ^
   --plot docs\assets\benchmark_random_cpp_python.png ^
   --summary-csv docs\assets\benchmark_random_summary.csv ^
@@ -89,18 +94,19 @@ The Python C++ interface compiles and caches a dynamic library through
 chart reports normal cached `ctypes` calls rather than first-use compilation
 time.
 
-The original lightweight suite is run with `--max-paths -1 --ban-heuristic`,
-`--reduction-round -1`, which means complete green-path enumeration after
+The original lightweight suite is run with `--max-paths -1 --ban-heuristic`
+and `--reduction-round -1`, which means complete green-path enumeration after
 preprocessing and iteration until stable. The large zip-random suite is run
-with `--max-paths -1 --reduction-round 3`, which means deterministic
-heuristic green-path sampling and a three-round cap. Full terminal
-brute-force stability proofs on these 120-150 crossing diagrams can dominate
-runtime; use `--verbose` to inspect the exact round where a run is spending
-time.
+with `--max-paths -1 --reduction-round -1`, which means deterministic
+heuristic green-path sampling plus the brute-force fallback used to prove
+terminal stability. Full terminal brute-force stability proofs on these
+120-150 crossing diagrams can dominate runtime; use `--verbose` to inspect
+the exact round where a run is spending time.
 
 Each measurement repeat writes the selected cases to one temporary multi-line
-PD-code file, then starts each engine once to process the whole file. The chart
-reports average time per PD code and peak RSS for the whole batch.
+PD-code file, then starts each engine once to process the whole file. The same
+run compares C++ CLI, Python C++ interface, and Python JSON outputs exactly.
+The chart reports average time per PD code and peak RSS for the whole batch.
 
 All three engines run the same default preprocessing pipeline before the
 mid-simplification search: R1-move removal followed by nugatory-crossing
@@ -108,13 +114,13 @@ removal. The Python prototype implements this preprocessing in Python, while
 the Python C++ interface reuses the C++ dynamic library.
 
 The C++ heuristic-vs-brute-force comparison is separate from the three-engine
-benchmark and runs only on the ten zip-random large cases:
+benchmark and runs only on the five active zip-random large cases:
 
 ```sh
 .\.venv\Scripts\python tools\benchmark_cpp_heuristic.py ^
   --repeat 1 ^
-  --reduction-round 3 ^
-  --timeout 60 ^
+  --reduction-round -1 ^
+  --max-thread 16 ^
   --plot docs\assets\heuristic_vs_bruteforce_random.png ^
   --summary-csv docs\assets\heuristic_vs_bruteforce_random_summary.csv ^
   --raw-csv docs\assets\heuristic_vs_bruteforce_random_raw.csv ^
@@ -122,8 +128,9 @@ benchmark and runs only on the ten zip-random large cases:
 ```
 
 The reduction metric for that chart is actual crossing reduction after the
-configured number of applied rounds, divided by the original crossing count.
-Timeouts are recorded as timed-out rows instead of aborting the benchmark.
+configured reduction loop finishes, divided by the original crossing count.
+Timeouts are supported by the tool and are recorded as timed-out rows instead
+of aborting the benchmark, but the committed run below did not use a timeout.
 
 ## Local Results
 
@@ -131,7 +138,8 @@ The committed charts were generated on the local Windows development machine
 with a local 64-bit MinGW `g++ -O3 -DNDEBUG` C++ executable. The original
 lightweight suite uses `max_paths=-1`, heuristic disabled, and
 `reduction_round=-1`. The zip-random suite uses `max_paths=-1`, heuristic
-enabled, and `reduction_round=3`.
+enabled, `reduction_round=-1`, `max_thread=16`, and the first five active
+large cases. Each suite was measured with one repeat.
 
 Original lightweight suite:
 
@@ -139,9 +147,9 @@ Original lightweight suite:
 
 | Engine | Average Time Per PD Code (s) | Average Peak RSS (MiB) |
 | --- | ---: | ---: |
-| C++ CLI | 0.139629 | 5.417 |
-| Python C++ interface | 0.155052 | 30.647 |
-| Python | 0.993588 | 27.158 |
+| C++ CLI | 0.043827 | 11.684 |
+| Python C++ interface | 0.068139 | 36.590 |
+| Python | 2.624598 | 430.738 |
 
 Zip-random large-case suite:
 
@@ -149,27 +157,29 @@ Zip-random large-case suite:
 
 | Engine | Average Time Per PD Code (s) | Average Peak RSS (MiB) |
 | --- | ---: | ---: |
-| C++ CLI | 0.912638 | 5.965 |
-| Python C++ interface | 0.886163 | 31.129 |
-| Python | 8.612555 | 27.789 |
+| C++ CLI | 116.428829 | 486.109 |
+| Python C++ interface | 113.286344 | 508.777 |
+| Python | 1135.775731 | 1354.438 |
 
 Summary CSV files are stored in
 [`docs/assets/benchmark_original_summary.csv`](assets/benchmark_original_summary.csv)
 and [`docs/assets/benchmark_random_summary.csv`](assets/benchmark_random_summary.csv).
 Raw measurements are stored in the matching `*_raw.csv` files.
 
-C++ heuristic-vs-brute-force comparison on the zip-random large-case suite:
+C++ heuristic-vs-brute-force comparison on the five active zip-random
+large-case suite:
 
 ![C++ heuristic versus brute-force green-path search](assets/heuristic_vs_bruteforce_random.png)
 
 | Mode | Average Time Per PD Code (s) | Reduction / Original Crossings (%) |
 | --- | ---: | ---: |
-| Heuristic | 0.973676 | 39.985 |
-| Brute force | 19.144971 | 31.828 |
+| Heuristic | 107.205879 | 87.500 |
+| Brute force | 102.876157 | 86.295 |
 
-The brute-force row includes two 60-second timeouts. Those rows are counted as
-zero completed reduction for the effect metric and as 60 seconds for the time
-metric.
+In this strict run the heuristic found slightly more total reduction, while
+brute-force enumeration was slightly faster on average. The largest case
+(`zip_random_03`) dominated both rows; raw per-case timings and path counts are
+stored in the matching raw CSV.
 
 The summary CSV is stored in
 [`docs/assets/heuristic_vs_bruteforce_random_summary.csv`](assets/heuristic_vs_bruteforce_random_summary.csv).

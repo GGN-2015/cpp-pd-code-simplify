@@ -50,6 +50,7 @@ struct GreenCrossing {
 
 struct SimplifierOptions {
     int max_paths = -1;
+    int max_threads = -1;
     bool ban_heuristic = false;
     bool require_applicable = false;
     bool verbose = false;

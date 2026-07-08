@@ -23,10 +23,12 @@ then nugatory-crossing removal.
   --include-interface ^
   --max-paths -1 ^
   --ban-heuristic ^
-  --reduction-round -1
+  --reduction-round -1 ^
+  --max-thread 16
 ```
 
-To compare the ten zip-random large cases with heuristic green-path sampling:
+To compare the five active zip-random large cases with heuristic green-path
+sampling and strict terminal stability:
 
 ```sh
 .\.venv\Scripts\python tools\compare_cpp_python.py ^
@@ -34,7 +36,8 @@ To compare the ten zip-random large cases with heuristic green-path sampling:
   --suite random ^
   --include-interface ^
   --max-paths -1 ^
-  --reduction-round 3
+  --reduction-round -1 ^
+  --max-thread 16
 ```
 
 On Linux and macOS, use `.venv/bin/python` instead of
@@ -48,10 +51,12 @@ from being checked.
 
 ## Benchmarking
 
-Use the benchmark runner to measure wall-clock time and peak RSS:
+Use the benchmark runner to measure wall-clock time and peak RSS while also
+checking C++ CLI, Python C++ interface, and Python JSON outputs in the same
+run:
 
 ```sh
-.\.venv\Scripts\python tools\benchmark_cpp_python.py --repeat 3
+.\.venv\Scripts\python tools\benchmark_cpp_python.py --repeat 1
 ```
 
 The benchmark dataset, chart-generation command, committed PNG chart, and

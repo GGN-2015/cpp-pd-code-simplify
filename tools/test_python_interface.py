@@ -70,8 +70,11 @@ def main() -> int:
     assert kink["final_components"]["crossingless_components"] == 1
     assert kink["final_pd_code"] == "PD[]"
 
-    brute = interface.simplify(TREFOIL, ban_heuristic=True)
+    brute = interface.simplify(TREFOIL, ban_heuristic=True, max_thread=1)
+    brute_parallel = interface.simplify(TREFOIL, ban_heuristic=True, max_thread=4)
     assert brute["last_path_search_mode"] == "bruteforce"
+    assert brute_parallel["final_pd_code"] == brute["final_pd_code"]
+    assert brute_parallel["tested_green_paths"] == brute["tested_green_paths"]
 
     limited = interface.simplify(TREFOIL, reduction_round=0)
     assert limited["stopped_by_round_limit"] is True

@@ -102,15 +102,16 @@ falls outside the sampled frontier. Use `--ban-heuristic --max-paths -1` when
 complete enumeration is required for a manageable input.
 
 The C++-only benchmark in `tools/benchmark_cpp_heuristic.py` compares
-heuristic mode with brute-force mode on the ten large random benchmark
+heuristic mode with brute-force mode on the five active large random benchmark
 diagrams. It reports both runtime and actual crossing reduction after applying
-the configured number of reduction rounds. The reduction metric is:
+the configured reduction loop. The reduction metric is:
 
 ```text
 original crossings - final crossings
 ```
 
 The result is divided by the original crossing count. The committed large-case
-chart uses a three-round cap and a timeout budget for brute-force runs, because
-full terminal brute-force stability proofs can dominate runtime on
-120-150-crossing diagrams.
+chart uses `--reduction-round -1 --max-thread 16` with no timeout. In that
+strict run, heuristic mode found slightly more total crossing reduction on the
+five active cases, while brute-force mode was slightly faster on average
+because the hardest case forced a large brute-force fallback in both modes.

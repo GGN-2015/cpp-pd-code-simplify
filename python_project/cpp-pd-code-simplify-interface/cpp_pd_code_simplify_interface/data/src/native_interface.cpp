@@ -112,6 +112,7 @@ char* pdcode_simplify_run_json(
     int max_paths,
     int ban_heuristic,
     int reduction_round,
+    int max_thread,
     int verbose,
     unsigned long long known_crossingless_components,
     const int* removed_crossings,
@@ -124,6 +125,7 @@ char* pdcode_simplify_run_json(
         const std::string text(pd_text);
         pdcode_simplify::SimplifierOptions options;
         options.max_paths = max_paths;
+        options.max_threads = max_thread;
         options.ban_heuristic = ban_heuristic != 0;
         options.verbose = verbose != 0;
         options.progress = [](const std::string& message) {

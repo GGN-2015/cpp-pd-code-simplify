@@ -1,4 +1,4 @@
-case,family,crossings,case_count,engine,repeat,time_seconds,avg_time_per_case_seconds,peak_rss_mib,return_code
-batch,mixed,1373,10,cpp,1,9.126375300111249,0.9126375300111249,5.96484375,0
-batch,mixed,1373,10,interface,1,8.861625999910757,0.8861625999910757,31.12890625,0
-batch,mixed,1373,10,python,1,86.12555400002748,8.612555400002748,27.7890625,0
+case,family,crossings,case_count,engine,repeat,time_seconds,avg_time_per_case_seconds,peak_rss_mib,return_code,result_count,correctness_ok
+batch,mixed,664,5,cpp,1,582.144146699924,116.4288293399848,486.109375,0,5,True
+batch,mixed,664,5,interface,1,566.4317195999902,113.28634391999803,508.77734375,0,5,True
+batch,mixed,664,5,python,1,5678.87865479989,1135.7757309599779,1354.4375,0,5,True

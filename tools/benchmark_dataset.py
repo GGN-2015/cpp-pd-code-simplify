@@ -8,7 +8,8 @@ laptop, but it still covers several input shapes:
 - a scalable T(2, n) torus-knot family,
 - diagrams inflated by deterministic reverse Reidemeister-I moves, and
 - the historical 31-crossing reference case used by this repository, and
-- ten deterministic random samples extracted from a local PD-code corpus.
+- the first five deterministic random samples extracted from a local PD-code
+  corpus fixture.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ X[60,17,61,18],X[59,38,60,39],X[58,47,59,48]
 ]"""
 
 RANDOM_FIXTURE = ROOT / "tests" / "benchmark_random_pd_codes.txt"
+RANDOM_BENCHMARK_LIMIT = 5
 
 
 @dataclass(frozen=True)
@@ -205,7 +207,7 @@ def load_random_cases() -> Tuple[BenchmarkCase, ...]:
                     "Deterministic random sample from the local pd_code.zip corpus.",
                 )
             )
-    return tuple(cases)
+    return tuple(cases[:RANDOM_BENCHMARK_LIMIT])
 
 
 ORIGINAL_BENCHMARK_CASES = build_original_cases()

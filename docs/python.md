@@ -85,8 +85,9 @@ Run Python-only prototype checks, including crossingless component accounting:
 Compare runtime and peak RSS memory usage:
 
 ```sh
-.\.venv\Scripts\python tools\benchmark_cpp_python.py --repeat 3
+.\.venv\Scripts\python tools\benchmark_cpp_python.py --repeat 1
 ```
 
-The benchmark dataset, chart-generation command, and latest local results are
-documented in [Benchmarking](benchmarking.md).
+The benchmark runner also checks C++ CLI, Python C++ interface, and Python JSON
+outputs in the same run. The dataset, chart-generation commands, and latest
+local results are documented in [Benchmarking](benchmarking.md).

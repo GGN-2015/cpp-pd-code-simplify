@@ -106,6 +106,7 @@ def run_cpp_batch(
     max_paths: int,
     ban_heuristic: bool,
     reduction_round: int,
+    max_thread: int,
     verbose: bool,
 ) -> List[Dict[str, object]]:
     command = [
@@ -117,6 +118,8 @@ def run_cpp_batch(
         str(max_paths),
         "--reduction-round",
         str(reduction_round),
+        "--max-thread",
+        str(max_thread),
     ]
     if verbose:
         command.append("--verbose")
@@ -138,6 +141,7 @@ def run_python_cli_batch(
     max_paths: int,
     ban_heuristic: bool,
     reduction_round: int,
+    max_thread: int,
     verbose: bool,
 ) -> List[Dict[str, object]]:
     command = [
@@ -150,6 +154,8 @@ def run_python_cli_batch(
         str(max_paths),
         "--reduction-round",
         str(reduction_round),
+        "--max-thread",
+        str(max_thread),
     ]
     if verbose:
         command.append("--verbose")
@@ -182,6 +188,7 @@ def run_interface_batch(
     max_paths: int,
     ban_heuristic: bool,
     reduction_round: int,
+    max_thread: int,
     interface_cxx: str | None,
     verbose: bool,
 ) -> List[Dict[str, object]]:
@@ -195,6 +202,8 @@ def run_interface_batch(
         str(max_paths),
         "--reduction-round",
         str(reduction_round),
+        "--max-thread",
+        str(max_thread),
     ]
     if verbose:
         command.append("--verbose")
@@ -224,6 +233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--max-paths", type=int, default=-1)
     parser.add_argument("--ban-heuristic", action="store_true")
     parser.add_argument("--reduction-round", type=int, default=-1)
+    parser.add_argument("--max-thread", type=int, default=-1)
     parser.add_argument("--verbose", action="store_true", help="forward progress logs from child processes")
     parser.add_argument("--include-reference", action="store_true", help="include the 31-crossing reference case")
     parser.add_argument("--include-benchmark", action="store_true", help="include the deterministic benchmark dataset")
@@ -247,6 +257,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.max_paths,
                 args.ban_heuristic,
                 args.reduction_round,
+                args.max_thread,
                 args.verbose,
             )
         ]
@@ -257,6 +268,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.max_paths,
                 args.ban_heuristic,
                 args.reduction_round,
+                args.max_thread,
                 args.verbose,
             )
         ]
@@ -269,6 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.max_paths,
                     args.ban_heuristic,
                     args.reduction_round,
+                    args.max_thread,
                     args.interface_cxx,
                     args.verbose,
                 )

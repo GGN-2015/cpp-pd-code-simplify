@@ -47,6 +47,7 @@ void print_help(const char* program) {
         << "Use --reduction-round K to cap mid-simplification rounds; -1 means until stable.\n"
         << "With --max-paths -1, heuristic green-path sampling is enabled by default.\n"
         << "Use --ban-heuristic to force brute-force green-path enumeration.\n"
+        << "Use --max-thread N to cap brute-force worker threads; -1 means auto.\n"
         << "Use --verbose to print progress logs to stderr.\n"
         << "If no input is given, the CLI tries to read PD.txt from the current directory.\n";
 }
@@ -453,6 +454,14 @@ int main(int argc, char** argv) {
                     throw std::invalid_argument("--max-paths requires a value");
                 }
                 options.max_paths = std::stoi(argv[++i]);
+            } else if (arg == "--max-thread") {
+                if (i + 1 >= argc) {
+                    throw std::invalid_argument("--max-thread requires a value");
+                }
+                options.max_threads = std::stoi(argv[++i]);
+                if (options.max_threads < -1 || options.max_threads == 0) {
+                    throw std::invalid_argument("--max-thread must be -1 or a positive integer");
+                }
             } else if (arg == "--reduction-round") {
                 if (i + 1 >= argc) {
                     throw std::invalid_argument("--reduction-round requires a value");

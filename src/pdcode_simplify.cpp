@@ -6,12 +6,16 @@
 #include <deque>
 #include <limits>
 #include <map>
+#include <atomic>
+#include <exception>
+#include <mutex>
 #include <numeric>
 #include <queue>
 #include <random>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -998,12 +1002,6 @@ std::set<int> normalized_removed_crossings(const PDCode& code, const std::vector
     return removed;
 }
 
-void reset_weights(DualGraph& graph) {
-    for (auto& edge : graph.edges) {
-        edge.weight = 1;
-    }
-}
-
 std::vector<int> heuristic_distances_to_target(
     const DualGraph& graph,
     int target,
@@ -1504,9 +1502,27 @@ private:
 
 std::map<std::pair<int, int>, std::string> green_crossing_levels(
     const SimplificationResult& result) {
+    std::set<std::pair<int, int>> path_edges;
+    for (std::size_t i = 0; i + 1 < result.green_path.size(); ++i) {
+        path_edges.insert(std::make_pair(result.green_path[i], result.green_path[i + 1]));
+    }
+
     std::map<std::pair<int, int>, std::string> levels;
     for (const GreenCrossing& crossing : result.green_crossings) {
-        levels[std::make_pair(crossing.from_face, crossing.to_face)] = crossing.strand_level;
+        const std::pair<int, int> edge_key =
+            std::make_pair(crossing.from_face, crossing.to_face);
+        if (path_edges.count(edge_key) == 0) {
+            throw std::invalid_argument("Simplification witness has a green crossing outside the green path");
+        }
+        const auto inserted = levels.insert(std::make_pair(edge_key, crossing.strand_level));
+        if (!inserted.second && inserted.first->second != crossing.strand_level) {
+            throw std::invalid_argument("Simplification witness has conflicting green crossing levels");
+        }
+    }
+    for (const auto& edge_key : path_edges) {
+        if (levels.count(edge_key) == 0) {
+            throw std::invalid_argument("Simplification witness is missing a green crossing level");
+        }
     }
     return levels;
 }
@@ -1516,6 +1532,68 @@ void clear_witness(SimplificationResult& result) {
     result.red_path.clear();
     result.green_path.clear();
     result.green_crossings.clear();
+}
+
+int crossing_graph_component_count(const PDCode& code) {
+    const int crossing_count = static_cast<int>(code.size());
+    if (crossing_count == 0) {
+        return 0;
+    }
+
+    std::vector<int> parent(crossing_count);
+    std::iota(parent.begin(), parent.end(), 0);
+    std::function<int(int)> find = [&](int value) -> int {
+        if (parent[value] != value) {
+            parent[value] = find(parent[value]);
+        }
+        return parent[value];
+    };
+    auto unite = [&](int first, int second) {
+        int first_root = find(first);
+        int second_root = find(second);
+        if (first_root == second_root) {
+            return;
+        }
+        if (second_root < first_root) {
+            std::swap(first_root, second_root);
+        }
+        parent[second_root] = first_root;
+    };
+
+    std::map<int, std::vector<int>> label_crossings;
+    for (int crossing_index = 0; crossing_index < crossing_count; ++crossing_index) {
+        for (int strand = 0; strand < 4; ++strand) {
+            label_crossings[code[crossing_index][strand]].push_back(crossing_index);
+        }
+    }
+    for (const auto& item : label_crossings) {
+        if (item.second.size() != 2) {
+            std::ostringstream message;
+            message << "PD label " << item.first << " appears " << item.second.size()
+                    << " times; each label must appear exactly twice";
+            throw std::invalid_argument(message.str());
+        }
+        unite(item.second[0], item.second[1]);
+    }
+
+    std::set<int> roots;
+    for (int crossing_index = 0; crossing_index < crossing_count; ++crossing_index) {
+        roots.insert(find(crossing_index));
+    }
+    return static_cast<int>(roots.size());
+}
+
+bool is_planar_pd_code(const PDCode& code) {
+    if (code.empty()) {
+        return true;
+    }
+    Diagram diagram(code);
+    DualGraph graph(diagram);
+    const int vertices = static_cast<int>(code.size());
+    const int edges = vertices * 2;
+    const int faces = static_cast<int>(graph.faces.size());
+    const int graph_components = crossing_graph_component_count(code);
+    return vertices - edges + faces == 2 * graph_components;
 }
 
 }  // namespace
@@ -1637,14 +1715,14 @@ MidSimplificationApplyResult apply_simplification_witness(
         int green_out_pos = -1;
         if (crossed.level == "over") {
             existing_from_pos = 0;
-            green_in_pos = 1;
             existing_to_pos = 2;
-            green_out_pos = 3;
+            green_in_pos = 3;
+            green_out_pos = 1;
         } else if (crossed.level == "under") {
+            existing_from_pos = 1;
             green_in_pos = 0;
-            existing_to_pos = 1;
             green_out_pos = 2;
-            existing_from_pos = 3;
+            existing_to_pos = 3;
         } else {
             throw std::invalid_argument("Unknown green crossing strand level: " + crossed.level);
         }
@@ -1721,6 +1799,9 @@ MidSimplificationApplyResult apply_simplification_witness(
     const std::size_t total_components =
         analyze_components(code, known_crossingless_components).total_components();
     output = renumber_full_dfs(output);
+    if (!is_planar_pd_code(output)) {
+        throw std::invalid_argument("Applied simplification produced a non-planar PD code");
+    }
     const std::size_t crossing_components = analyze_components(output).components_with_crossings();
 
     MidSimplificationApplyResult applied;
@@ -2140,77 +2221,301 @@ PDSimplificationResult simplify_pd_code(
     return result;
 }
 
+namespace {
+
+int detected_worker_count() {
+    const unsigned int reported = std::thread::hardware_concurrency();
+    if (reported == 0) {
+        return 1;
+    }
+    if (reported <= 2) {
+        return static_cast<int>(reported);
+    }
+    return static_cast<int>(reported - 1);
+}
+
+int selected_bruteforce_worker_count(int max_threads, int task_count) {
+    if (task_count <= 1) {
+        return 1;
+    }
+    int requested = max_threads == -1 ? detected_worker_count() : max_threads;
+    if (requested < 1) {
+        requested = 1;
+    }
+    if (max_threads == -1 && task_count < 32) {
+        return 1;
+    }
+    return std::max(1, std::min(requested, task_count));
+}
+
+bool should_skip_parallel_red_path(
+    int red_index,
+    const std::atomic<int>* best_found_index) {
+    return best_found_index != nullptr &&
+           red_index > best_found_index->load(std::memory_order_relaxed);
+}
+
+void record_parallel_found_index(
+    int red_index,
+    std::atomic<int>* best_found_index) {
+    if (best_found_index == nullptr) {
+        return;
+    }
+    int observed = best_found_index->load(std::memory_order_relaxed);
+    while (red_index < observed &&
+           !best_found_index->compare_exchange_weak(
+               observed,
+               red_index,
+               std::memory_order_relaxed,
+               std::memory_order_relaxed)) {
+    }
+}
+
+struct RedPathSearchOutcome {
+    bool completed = false;
+    bool skipped = false;
+    bool found = false;
+    std::size_t tested_green_paths = 0;
+    SimplificationResult witness;
+};
+
+RedPathSearchOutcome search_single_red_path(
+    const PDCode& code,
+    const Diagram& diagram,
+    const DualGraph& base_graph,
+    const std::vector<Endpoint>& red_path,
+    const SimplifierOptions& options,
+    const std::string& path_search_mode,
+    int red_index,
+    const std::atomic<int>* best_found_index) {
+    RedPathSearchOutcome outcome;
+    outcome.witness.path_search_mode = path_search_mode;
+    if (should_skip_parallel_red_path(red_index, best_found_index)) {
+        outcome.skipped = true;
+        return outcome;
+    }
+
+    DualGraph graph = base_graph;
+    const Endpoint start = red_path.front();
+    const Endpoint end = red_path.back();
+    const int start_face = graph.edge_to_face[endpoint_key(start)];
+    const int start_opposite_face = graph.edge_to_face[endpoint_key(diagram.opposite(start))];
+    const int end_face = graph.edge_to_face[endpoint_key(end)];
+    const int end_opposite_face = graph.edge_to_face[endpoint_key(diagram.opposite(end))];
+    const std::array<int, 2> sources{start_face, start_opposite_face};
+    const std::array<int, 2> destinations{end_face, end_opposite_face};
+
+    for (std::size_t i = 1; i + 1 < red_path.size(); ++i) {
+        const Endpoint endpoint = red_path[i];
+        const int right_region = graph.edge_to_face[endpoint_key(endpoint)];
+        const int left_region = graph.edge_to_face[endpoint_key(diagram.opposite(endpoint))];
+        if (GraphEdge* edge = graph.mutable_edge(right_region, left_region)) {
+            edge->weight = kBlockedWeight;
+        }
+    }
+
+    std::vector<std::vector<int>> paths;
+    const int cutoff = static_cast<int>(red_path.size()) - 1;
+    for (int source : sources) {
+        for (int destination : destinations) {
+            if (should_skip_parallel_red_path(red_index, best_found_index)) {
+                outcome.skipped = true;
+                return outcome;
+            }
+            std::vector<std::vector<int>> found_paths;
+            if (options.max_paths == -1 && !options.ban_heuristic) {
+                found_paths = collect_heuristic_paths(graph, source, destination, cutoff);
+            } else {
+                found_paths = collect_simple_paths(graph, source, destination, cutoff, options.max_paths);
+            }
+            paths.insert(paths.end(), found_paths.begin(), found_paths.end());
+            if (options.max_paths != -1 && static_cast<int>(paths.size()) > options.max_paths) {
+                break;
+            }
+        }
+    }
+
+    for (const auto& green_path : paths) {
+        if (should_skip_parallel_red_path(red_index, best_found_index)) {
+            outcome.skipped = true;
+            return outcome;
+        }
+        ++outcome.tested_green_paths;
+        if (green_path.size() >= red_path.size()) {
+            continue;
+        }
+        if (do_check(diagram, graph, red_path, green_path, Direction::Left, outcome.witness)) {
+            if (!options.require_applicable || witness_has_applicable_surgery(code, outcome.witness)) {
+                outcome.found = true;
+                outcome.completed = true;
+                outcome.witness.tested_green_paths = outcome.tested_green_paths;
+                return outcome;
+            }
+            clear_witness(outcome.witness);
+        }
+        if (do_check(diagram, graph, red_path, green_path, Direction::Right, outcome.witness)) {
+            if (!options.require_applicable || witness_has_applicable_surgery(code, outcome.witness)) {
+                outcome.found = true;
+                outcome.completed = true;
+                outcome.witness.tested_green_paths = outcome.tested_green_paths;
+                return outcome;
+            }
+            clear_witness(outcome.witness);
+        }
+    }
+
+    outcome.completed = true;
+    outcome.witness.tested_green_paths = outcome.tested_green_paths;
+    return outcome;
+}
+
+SimplificationResult merge_red_path_outcomes(
+    const std::vector<RedPathSearchOutcome>& outcomes,
+    const std::string& path_search_mode) {
+    SimplificationResult result;
+    result.path_search_mode = path_search_mode;
+
+    int first_found = -1;
+    for (int i = 0; i < static_cast<int>(outcomes.size()); ++i) {
+        if (outcomes[i].found) {
+            first_found = i;
+            break;
+        }
+    }
+
+    const int limit = first_found >= 0 ? first_found : static_cast<int>(outcomes.size()) - 1;
+    for (int i = 0; i <= limit; ++i) {
+        if (!outcomes[i].completed && !outcomes[i].found) {
+            std::ostringstream message;
+            message << "Parallel brute-force search did not complete red path " << i;
+            throw std::runtime_error(message.str());
+        }
+        ++result.tested_red_paths;
+        result.tested_green_paths += outcomes[i].tested_green_paths;
+    }
+
+    if (first_found >= 0) {
+        result = outcomes[first_found].witness;
+        result.path_search_mode = path_search_mode;
+        result.tested_red_paths = static_cast<std::size_t>(first_found + 1);
+        result.tested_green_paths = 0;
+        for (int i = 0; i <= first_found; ++i) {
+            result.tested_green_paths += outcomes[i].tested_green_paths;
+        }
+    }
+    return result;
+}
+
+SimplificationResult find_simplification_parallel_bruteforce(
+    const PDCode& code,
+    const Diagram& diagram,
+    const DualGraph& base_graph,
+    const std::vector<std::vector<Endpoint>>& red_lines,
+    const SimplifierOptions& options,
+    const std::string& path_search_mode,
+    int worker_count) {
+    std::vector<RedPathSearchOutcome> outcomes(red_lines.size());
+    std::atomic<int> next_index(0);
+    std::atomic<int> best_found_index(static_cast<int>(red_lines.size()));
+    std::atomic<bool> failed(false);
+    std::exception_ptr first_exception;
+    std::mutex exception_mutex;
+
+    auto worker = [&]() {
+        while (!failed.load(std::memory_order_relaxed)) {
+            const int index = next_index.fetch_add(1, std::memory_order_relaxed);
+            if (index >= static_cast<int>(red_lines.size())) {
+                break;
+            }
+            if (should_skip_parallel_red_path(index, &best_found_index)) {
+                outcomes[index].skipped = true;
+                continue;
+            }
+            try {
+                RedPathSearchOutcome outcome = search_single_red_path(
+                    code,
+                    diagram,
+                    base_graph,
+                    red_lines[index],
+                    options,
+                    path_search_mode,
+                    index,
+                    &best_found_index);
+                if (outcome.found) {
+                    record_parallel_found_index(index, &best_found_index);
+                }
+                outcomes[index] = std::move(outcome);
+            } catch (...) {
+                failed.store(true, std::memory_order_relaxed);
+                std::lock_guard<std::mutex> lock(exception_mutex);
+                if (!first_exception) {
+                    first_exception = std::current_exception();
+                }
+                break;
+            }
+        }
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(worker_count));
+    for (int i = 0; i < worker_count; ++i) {
+        workers.emplace_back(worker);
+    }
+    for (std::thread& thread : workers) {
+        thread.join();
+    }
+    if (first_exception) {
+        std::rethrow_exception(first_exception);
+    }
+
+    return merge_red_path_outcomes(outcomes, path_search_mode);
+}
+
+}  // namespace
+
 SimplificationResult find_simplification(
     const PDCode& code,
     const SimplifierOptions& options) {
     SimplificationResult result;
-    if (options.max_paths == -1 && !options.ban_heuristic) {
-        result.path_search_mode = "heuristic";
-    } else if (options.max_paths == -1) {
-        result.path_search_mode = "bruteforce";
-    } else {
-        result.path_search_mode = "bounded";
-    }
+    result.path_search_mode = search_mode_for_options(options);
     Diagram diagram(code);
-    DualGraph graph(diagram);
+    DualGraph base_graph(diagram);
     const auto red_lines = possible_red_lines(diagram);
+    const bool brute_force_mode = options.max_paths == -1 && options.ban_heuristic;
+    const int worker_count = brute_force_mode
+        ? selected_bruteforce_worker_count(
+              options.max_threads,
+              static_cast<int>(red_lines.size()))
+        : 1;
+    if (worker_count > 1) {
+        return find_simplification_parallel_bruteforce(
+            code,
+            diagram,
+            base_graph,
+            red_lines,
+            options,
+            result.path_search_mode,
+            worker_count);
+    }
 
     for (const auto& red_path : red_lines) {
         ++result.tested_red_paths;
-        reset_weights(graph);
-
-        const Endpoint start = red_path.front();
-        const Endpoint end = red_path.back();
-        const int start_face = graph.edge_to_face[endpoint_key(start)];
-        const int start_opposite_face = graph.edge_to_face[endpoint_key(diagram.opposite(start))];
-        const int end_face = graph.edge_to_face[endpoint_key(end)];
-        const int end_opposite_face = graph.edge_to_face[endpoint_key(diagram.opposite(end))];
-        const std::array<int, 2> sources{start_face, start_opposite_face};
-        const std::array<int, 2> destinations{end_face, end_opposite_face};
-
-        for (std::size_t i = 1; i + 1 < red_path.size(); ++i) {
-            const Endpoint endpoint = red_path[i];
-            const int right_region = graph.edge_to_face[endpoint_key(endpoint)];
-            const int left_region = graph.edge_to_face[endpoint_key(diagram.opposite(endpoint))];
-            if (GraphEdge* edge = graph.mutable_edge(right_region, left_region)) {
-                edge->weight = kBlockedWeight;
-            }
-        }
-
-        std::vector<std::vector<int>> paths;
-        const int cutoff = static_cast<int>(red_path.size()) - 1;
-        for (int source : sources) {
-            for (int destination : destinations) {
-                std::vector<std::vector<int>> found_paths;
-                if (options.max_paths == -1 && !options.ban_heuristic) {
-                    found_paths = collect_heuristic_paths(graph, source, destination, cutoff);
-                } else {
-                    found_paths = collect_simple_paths(graph, source, destination, cutoff, options.max_paths);
-                }
-                paths.insert(paths.end(), found_paths.begin(), found_paths.end());
-                if (options.max_paths != -1 && static_cast<int>(paths.size()) > options.max_paths) {
-                    break;
-                }
-            }
-        }
-
-        for (const auto& green_path : paths) {
-            ++result.tested_green_paths;
-            if (green_path.size() >= red_path.size()) {
-                continue;
-            }
-            if (do_check(diagram, graph, red_path, green_path, Direction::Left, result)) {
-                if (!options.require_applicable || witness_has_applicable_surgery(code, result)) {
-                    return result;
-                }
-                clear_witness(result);
-            }
-            if (do_check(diagram, graph, red_path, green_path, Direction::Right, result)) {
-                if (!options.require_applicable || witness_has_applicable_surgery(code, result)) {
-                    return result;
-                }
-                clear_witness(result);
-            }
+        const RedPathSearchOutcome outcome = search_single_red_path(
+            code,
+            diagram,
+            base_graph,
+            red_path,
+            options,
+            result.path_search_mode,
+            -1,
+            nullptr);
+        result.tested_green_paths += outcome.tested_green_paths;
+        if (outcome.found) {
+            SimplificationResult found = outcome.witness;
+            found.path_search_mode = result.path_search_mode;
+            found.tested_red_paths = result.tested_red_paths;
+            found.tested_green_paths = result.tested_green_paths;
+            return found;
         }
     }
 
@@ -2228,6 +2533,7 @@ ReductionResult reduce_pd_code(
                 << " known_crossingless_components=" << known_crossingless_components
                 << " reduction_round=" << reduction_round
                 << " max_paths=" << options.max_paths
+                << " max_thread=" << options.max_threads
                 << " heuristic=" << (options.ban_heuristic ? "off" : "on");
         emit_progress(options, message.str());
     }
@@ -2256,7 +2562,8 @@ ReductionResult reduce_pd_code(
             std::ostringstream message;
             message << "round " << round
                     << " search_start crossings=" << output.code.size()
-                    << " mode=" << search_mode_for_options(search_options);
+                    << " mode=" << search_mode_for_options(search_options)
+                    << " max_thread=" << search_options.max_threads;
             emit_progress(options, message.str());
         }
         SimplificationResult search = find_simplification(output.code, search_options);
@@ -2282,7 +2589,8 @@ ReductionResult reduce_pd_code(
             {
                 std::ostringstream message;
                 message << "round " << round
-                        << " brute_fallback_start crossings=" << output.code.size();
+                        << " brute_fallback_start crossings=" << output.code.size()
+                        << " max_thread=" << brute_options.max_threads;
                 emit_progress(options, message.str());
             }
             SimplificationResult brute = find_simplification(output.code, brute_options);

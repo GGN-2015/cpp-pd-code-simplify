@@ -213,8 +213,8 @@ void test_reference_sample() {
     require(!result.green_path.empty(), "witness should include a green path");
 
     const auto reduced = pdcode_simplify::reduce_pd_code(code);
-    require(reduced.code.size() == 4,
-            "full reference reduction should apply witnesses and end at four crossings");
+    require(reduced.code.size() == 3,
+            "full reference reduction should apply witnesses and end at three crossings");
     require(reduced.mid_simplification_rounds > 0,
             "full reference reduction should use at least one mid-simplification round");
 }

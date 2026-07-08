@@ -82,9 +82,13 @@ C++ heuristic versus brute-force search on the zip-random large cases:
 
 This local run uses the deterministic benchmark set documented in
 [Benchmarking](docs/benchmarking.md). The lightweight suite is measured with
-strict `--reduction-round -1`; the large zip-random throughput chart uses
-`--reduction-round 3` because terminal brute-force stability proofs can be
-very expensive on 120-150 crossing diagrams.
+`--max-paths -1 --ban-heuristic --reduction-round -1 --max-thread 16`. The
+large zip-random throughput chart uses the first five active zip-random cases
+with `--max-paths -1 --reduction-round -1 --max-thread 16`; the benchmark
+checks C++ CLI, Python C++ interface, and Python outputs for exact JSON
+agreement in the same run that measures time and peak RSS. The C++-only
+heuristic chart compares default heuristic sampling with exhaustive green-path
+enumeration on the same five large cases.
 
 ## Documentation
 

@@ -8,15 +8,17 @@ PD-code input style as the project executable and `cppkh`.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import heapq
 import json
+import multiprocessing
 import os
 import re
 import sys
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Deque, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 
 PDCode = List[Tuple[int, int, int, int]]
@@ -126,6 +128,15 @@ class SimplificationResult:
                 crossing.to_json() for crossing in self.green_crossings
             ]
         return data
+
+
+@dataclass
+class RedPathSearchOutcome:
+    completed: bool = False
+    skipped: bool = False
+    found: bool = False
+    tested_green_paths: int = 0
+    witness: SimplificationResult = field(default_factory=SimplificationResult)
 
 
 @dataclass
@@ -843,6 +854,130 @@ def reset_weights(graph: DualGraph) -> None:
         edge.weight = 1
 
 
+def clone_dual_graph(graph: DualGraph) -> DualGraph:
+    clone = object.__new__(DualGraph)
+    clone.edge_to_face = list(graph.edge_to_face)
+    clone.face_assignment_order = list(graph.face_assignment_order)
+    clone.faces = [list(face) for face in graph.faces]
+    clone.edges = [
+        GraphEdge(edge.u, edge.v, edge.interface_u, edge.interface_v, edge.weight)
+        for edge in graph.edges
+    ]
+    clone.adjacency = [list(edges) for edges in graph.adjacency]
+    clone.edge_by_faces = dict(graph.edge_by_faces)
+    return clone
+
+
+def detected_worker_count() -> int:
+    reported = os.cpu_count() or 1
+    if reported <= 2:
+        return reported
+    return reported - 1
+
+
+def selected_bruteforce_worker_count(max_thread: int, task_count: int) -> int:
+    if task_count <= 1:
+        return 1
+    requested = detected_worker_count() if max_thread == -1 else max_thread
+    if requested < 1:
+        requested = 1
+    if max_thread == -1 and task_count < 32:
+        return 1
+    return max(1, min(requested, task_count))
+
+
+_PARALLEL_CODE: Optional[PDCode] = None
+_PARALLEL_DIAGRAM: Optional[Diagram] = None
+_PARALLEL_BASE_GRAPH: Optional[DualGraph] = None
+_PARALLEL_RED_LINES: Optional[List[List[Endpoint]]] = None
+_PARALLEL_REQUIRE_APPLICABLE = False
+_PARALLEL_BEST_INDEX: Any = None
+_PARALLEL_BEST_LOCK: Any = None
+
+
+def _parallel_bruteforce_initializer(
+    code: PDCode,
+    red_lines: List[List[Endpoint]],
+    require_applicable: bool,
+    best_index: Any,
+    best_lock: Any,
+) -> None:
+    global _PARALLEL_CODE
+    global _PARALLEL_DIAGRAM
+    global _PARALLEL_BASE_GRAPH
+    global _PARALLEL_RED_LINES
+    global _PARALLEL_REQUIRE_APPLICABLE
+    global _PARALLEL_BEST_INDEX
+    global _PARALLEL_BEST_LOCK
+
+    _PARALLEL_CODE = code
+    _PARALLEL_DIAGRAM = Diagram(code)
+    _PARALLEL_BASE_GRAPH = DualGraph(_PARALLEL_DIAGRAM)
+    _PARALLEL_RED_LINES = red_lines
+    _PARALLEL_REQUIRE_APPLICABLE = require_applicable
+    _PARALLEL_BEST_INDEX = best_index
+    _PARALLEL_BEST_LOCK = best_lock
+
+
+def _parallel_should_skip(red_index: int) -> bool:
+    return _PARALLEL_BEST_INDEX is not None and red_index > _PARALLEL_BEST_INDEX.value
+
+
+def _parallel_record_found(red_index: int) -> None:
+    if _PARALLEL_BEST_INDEX is None or _PARALLEL_BEST_LOCK is None:
+        return
+    with _PARALLEL_BEST_LOCK:
+        if red_index < _PARALLEL_BEST_INDEX.value:
+            _PARALLEL_BEST_INDEX.value = red_index
+
+
+def crossing_graph_component_count(code: PDCode) -> int:
+    if not code:
+        return 0
+
+    parent = list(range(len(code)))
+
+    def find(value: int) -> int:
+        if parent[value] != value:
+            parent[value] = find(parent[value])
+        return parent[value]
+
+    def union(first: int, second: int) -> None:
+        first_root = find(first)
+        second_root = find(second)
+        if first_root == second_root:
+            return
+        if second_root < first_root:
+            first_root, second_root = second_root, first_root
+        parent[second_root] = first_root
+
+    label_crossings: Dict[int, List[int]] = {}
+    for crossing_index, crossing in enumerate(code):
+        for label in crossing:
+            label_crossings.setdefault(label, []).append(crossing_index)
+    for label, crossings in label_crossings.items():
+        if len(crossings) != 2:
+            raise ValueError(
+                f"PD label {label} appears {len(crossings)} times; "
+                "each label must appear exactly twice"
+            )
+        union(crossings[0], crossings[1])
+
+    return len({find(crossing_index) for crossing_index in range(len(code))})
+
+
+def is_planar_pd_code(code: PDCode) -> bool:
+    if not code:
+        return True
+    diagram = Diagram(code)
+    graph = DualGraph(diagram)
+    vertices = len(code)
+    edges = 2 * vertices
+    faces = len(graph.faces)
+    graph_components = crossing_graph_component_count(code)
+    return vertices - edges + faces == 2 * graph_components
+
+
 def collect_simple_paths(
     graph: DualGraph,
     source: int,
@@ -1243,12 +1378,174 @@ def witness_has_applicable_surgery(code: PDCode, result: SimplificationResult) -
     return True
 
 
+def search_single_red_path(
+    code: PDCode,
+    diagram: Diagram,
+    base_graph: DualGraph,
+    red_path: List[Endpoint],
+    max_paths: int,
+    ban_heuristic: bool,
+    require_applicable: bool,
+    path_search_mode: str,
+    should_skip: Optional[Callable[[], bool]] = None,
+) -> RedPathSearchOutcome:
+    outcome = RedPathSearchOutcome()
+    outcome.witness.path_search_mode = path_search_mode
+    if should_skip is not None and should_skip():
+        outcome.skipped = True
+        return outcome
+
+    graph = clone_dual_graph(base_graph)
+    start = red_path[0]
+    end = red_path[-1]
+    sources = [
+        graph.edge_to_face[start.key],
+        graph.edge_to_face[diagram.opposite(start).key],
+    ]
+    destinations = [
+        graph.edge_to_face[end.key],
+        graph.edge_to_face[diagram.opposite(end).key],
+    ]
+
+    for endpoint in red_path[1:-1]:
+        right_region = graph.edge_to_face[endpoint.key]
+        left_region = graph.edge_to_face[diagram.opposite(endpoint).key]
+        edge = graph.edge(right_region, left_region)
+        if edge is not None:
+            edge.weight = BLOCKED_WEIGHT
+
+    paths: List[List[int]] = []
+    cutoff = len(red_path) - 1
+    for source in sources:
+        for destination in destinations:
+            if should_skip is not None and should_skip():
+                outcome.skipped = True
+                return outcome
+            if max_paths == -1 and not ban_heuristic:
+                found = collect_heuristic_paths(graph, source, destination, cutoff)
+            else:
+                found = collect_simple_paths(graph, source, destination, cutoff, max_paths)
+            paths.extend(found)
+            if max_paths != -1 and len(paths) > max_paths:
+                break
+
+    for green_path in paths:
+        outcome.tested_green_paths += 1
+        if len(green_path) >= len(red_path):
+            continue
+        if do_check(diagram, graph, red_path, green_path, "left", outcome.witness):
+            if not require_applicable or witness_has_applicable_surgery(code, outcome.witness):
+                outcome.found = True
+                outcome.completed = True
+                outcome.witness.tested_green_paths = outcome.tested_green_paths
+                return outcome
+            outcome.witness = SimplificationResult(path_search_mode=path_search_mode)
+        if do_check(diagram, graph, red_path, green_path, "right", outcome.witness):
+            if not require_applicable or witness_has_applicable_surgery(code, outcome.witness):
+                outcome.found = True
+                outcome.completed = True
+                outcome.witness.tested_green_paths = outcome.tested_green_paths
+                return outcome
+            outcome.witness = SimplificationResult(path_search_mode=path_search_mode)
+
+    outcome.completed = True
+    outcome.witness.tested_green_paths = outcome.tested_green_paths
+    return outcome
+
+
+def _parallel_bruteforce_worker(red_index: int) -> RedPathSearchOutcome:
+    if (
+        _PARALLEL_CODE is None
+        or _PARALLEL_DIAGRAM is None
+        or _PARALLEL_BASE_GRAPH is None
+        or _PARALLEL_RED_LINES is None
+    ):
+        raise RuntimeError("Parallel brute-force worker was not initialized")
+    if _parallel_should_skip(red_index):
+        return RedPathSearchOutcome(skipped=True)
+    outcome = search_single_red_path(
+        _PARALLEL_CODE,
+        _PARALLEL_DIAGRAM,
+        _PARALLEL_BASE_GRAPH,
+        _PARALLEL_RED_LINES[red_index],
+        max_paths=-1,
+        ban_heuristic=True,
+        require_applicable=_PARALLEL_REQUIRE_APPLICABLE,
+        path_search_mode="bruteforce",
+        should_skip=lambda: _parallel_should_skip(red_index),
+    )
+    if outcome.found:
+        _parallel_record_found(red_index)
+    return outcome
+
+
+def merge_red_path_outcomes(
+    outcomes: List[RedPathSearchOutcome],
+    path_search_mode: str,
+) -> SimplificationResult:
+    result = SimplificationResult(path_search_mode=path_search_mode)
+    first_found = next(
+        (index for index, outcome in enumerate(outcomes) if outcome.found),
+        -1,
+    )
+    limit = first_found if first_found >= 0 else len(outcomes) - 1
+    for index in range(limit + 1):
+        outcome = outcomes[index]
+        if not outcome.completed and not outcome.found:
+            raise RuntimeError(
+                f"Parallel brute-force search did not complete red path {index}"
+            )
+        result.tested_red_paths += 1
+        result.tested_green_paths += outcome.tested_green_paths
+
+    if first_found >= 0:
+        witness = outcomes[first_found].witness
+        witness.path_search_mode = path_search_mode
+        witness.tested_red_paths = first_found + 1
+        witness.tested_green_paths = sum(
+            outcomes[index].tested_green_paths for index in range(first_found + 1)
+        )
+        return witness
+    return result
+
+
+def find_simplification_parallel_bruteforce(
+    code: PDCode,
+    red_lines: List[List[Endpoint]],
+    require_applicable: bool,
+    worker_count: int,
+) -> SimplificationResult:
+    if not red_lines:
+        return SimplificationResult(path_search_mode="bruteforce")
+    outcomes: List[RedPathSearchOutcome] = [
+        RedPathSearchOutcome() for _ in red_lines
+    ]
+    with multiprocessing.Manager() as manager:
+        best_index = manager.Value("i", len(red_lines))
+        best_lock = manager.Lock()
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=worker_count,
+            initializer=_parallel_bruteforce_initializer,
+            initargs=(code, red_lines, require_applicable, best_index, best_lock),
+        ) as executor:
+            futures = [
+                executor.submit(_parallel_bruteforce_worker, index)
+                for index in range(len(red_lines))
+            ]
+            for index, future in enumerate(futures):
+                outcomes[index] = future.result()
+    return merge_red_path_outcomes(outcomes, "bruteforce")
+
+
 def find_simplification(
     code: PDCode,
     max_paths: int = -1,
     ban_heuristic: bool = False,
     require_applicable: bool = False,
+    max_thread: int = -1,
 ) -> SimplificationResult:
+    if max_thread < -1 or max_thread == 0:
+        raise ValueError("max_thread must be -1 or a positive integer")
     result = SimplificationResult()
     if max_paths == -1 and not ban_heuristic:
         result.path_search_mode = "heuristic"
@@ -1257,54 +1554,37 @@ def find_simplification(
     else:
         result.path_search_mode = "bounded"
     diagram = Diagram(code)
-    graph = DualGraph(diagram)
+    base_graph = DualGraph(diagram)
     red_lines = possible_red_lines(diagram)
+    if max_paths == -1 and ban_heuristic:
+        worker_count = selected_bruteforce_worker_count(max_thread, len(red_lines))
+        if worker_count > 1:
+            return find_simplification_parallel_bruteforce(
+                code,
+                red_lines,
+                require_applicable,
+                worker_count,
+            )
 
     for red_path in red_lines:
         result.tested_red_paths += 1
-        reset_weights(graph)
-        start = red_path[0]
-        end = red_path[-1]
-        sources = [
-            graph.edge_to_face[start.key],
-            graph.edge_to_face[diagram.opposite(start).key],
-        ]
-        destinations = [
-            graph.edge_to_face[end.key],
-            graph.edge_to_face[diagram.opposite(end).key],
-        ]
-
-        for endpoint in red_path[1:-1]:
-            right_region = graph.edge_to_face[endpoint.key]
-            left_region = graph.edge_to_face[diagram.opposite(endpoint).key]
-            edge = graph.edge(right_region, left_region)
-            if edge is not None:
-                edge.weight = BLOCKED_WEIGHT
-
-        paths: List[List[int]] = []
-        cutoff = len(red_path) - 1
-        for source in sources:
-            for destination in destinations:
-                if max_paths == -1 and not ban_heuristic:
-                    found = collect_heuristic_paths(graph, source, destination, cutoff)
-                else:
-                    found = collect_simple_paths(graph, source, destination, cutoff, max_paths)
-                paths.extend(found)
-                if max_paths != -1 and len(paths) > max_paths:
-                    break
-
-        for green_path in paths:
-            result.tested_green_paths += 1
-            if len(green_path) >= len(red_path):
-                continue
-            if do_check(diagram, graph, red_path, green_path, "left", result):
-                if not require_applicable or witness_has_applicable_surgery(code, result):
-                    return result
-                result.found = False
-            if do_check(diagram, graph, red_path, green_path, "right", result):
-                if not require_applicable or witness_has_applicable_surgery(code, result):
-                    return result
-                result.found = False
+        outcome = search_single_red_path(
+            code,
+            diagram,
+            base_graph,
+            red_path,
+            max_paths,
+            ban_heuristic,
+            require_applicable,
+            result.path_search_mode,
+        )
+        result.tested_green_paths += outcome.tested_green_paths
+        if outcome.found:
+            witness = outcome.witness
+            witness.path_search_mode = result.path_search_mode
+            witness.tested_red_paths = result.tested_red_paths
+            witness.tested_green_paths = result.tested_green_paths
+            return witness
 
     return result
 
@@ -1331,9 +1611,26 @@ class DisjointSet:
 
 
 def green_crossing_levels(result: SimplificationResult) -> Dict[Tuple[int, int], str]:
+    path_edges = {
+        (result.green_path[index], result.green_path[index + 1])
+        for index in range(len(result.green_path) - 1)
+    }
     levels: Dict[Tuple[int, int], str] = {}
     for crossing in result.green_crossings:
-        levels[(crossing.from_face, crossing.to_face)] = crossing.strand_level
+        edge_key = (crossing.from_face, crossing.to_face)
+        if edge_key not in path_edges:
+            raise ValueError(
+                "Simplification witness has a green crossing outside the green path"
+            )
+        previous = levels.get(edge_key)
+        if previous is not None and previous != crossing.strand_level:
+            raise ValueError(
+                "Simplification witness has conflicting green crossing levels"
+            )
+        levels[edge_key] = crossing.strand_level
+    for edge_key in path_edges:
+        if edge_key not in levels:
+            raise ValueError("Simplification witness is missing a green crossing level")
     return levels
 
 
@@ -1416,14 +1713,14 @@ def apply_simplification_witness(
     for index, (interface_from, interface_to, level) in enumerate(crossed_edges):
         if level == "over":
             existing_from_pos = 0
-            green_in_pos = 1
             existing_to_pos = 2
-            green_out_pos = 3
+            green_in_pos = 3
+            green_out_pos = 1
         elif level == "under":
+            existing_from_pos = 1
             green_in_pos = 0
-            existing_to_pos = 1
             green_out_pos = 2
-            existing_from_pos = 3
+            existing_to_pos = 3
         else:
             raise ValueError(f"Unknown green crossing strand level: {level!r}")
 
@@ -1466,6 +1763,8 @@ def apply_simplification_witness(
 
     total_components = analyze_components(code, known_crossingless_components).total_components
     output = renumber_full_dfs(output)
+    if not is_planar_pd_code(output):
+        raise ValueError("Applied simplification produced a non-planar PD code")
     crossing_components = analyze_components(output).components_with_crossings if output else 0
     crossingless_components = max(0, total_components - crossing_components)
     return output, crossingless_components
@@ -1496,9 +1795,12 @@ def reduce_pd_code(
     max_paths: int = -1,
     ban_heuristic: bool = False,
     reduction_round: int = -1,
+    max_thread: int = -1,
     verbose: bool = False,
     progress: Optional[Callable[[str], None]] = None,
 ) -> ReductionResult:
+    if max_thread < -1 or max_thread == 0:
+        raise ValueError("max_thread must be -1 or a positive integer")
     _emit_progress(
         verbose,
         progress,
@@ -1506,6 +1808,7 @@ def reduce_pd_code(
             f"start input_crossings={len(code)} "
             f"known_crossingless_components={known_crossingless_components} "
             f"reduction_round={reduction_round} max_paths={max_paths} "
+            f"max_thread={max_thread} "
             f"heuristic={'off' if ban_heuristic else 'on'}"
         ),
     )
@@ -1535,7 +1838,8 @@ def reduce_pd_code(
             progress,
             (
                 f"round {round_index} search_start crossings={len(output.code)} "
-                f"mode={_search_mode(max_paths, ban_heuristic)}"
+                f"mode={_search_mode(max_paths, ban_heuristic)} "
+                f"max_thread={max_thread}"
             ),
         )
         search = find_simplification(
@@ -1543,6 +1847,7 @@ def reduce_pd_code(
             max_paths=max_paths,
             ban_heuristic=ban_heuristic,
             require_applicable=True,
+            max_thread=max_thread,
         )
         output.tested_red_paths += search.tested_red_paths
         output.tested_green_paths += search.tested_green_paths
@@ -1567,13 +1872,17 @@ def reduce_pd_code(
             _emit_progress(
                 verbose,
                 progress,
-                f"round {round_index} brute_fallback_start crossings={len(output.code)}",
+                (
+                    f"round {round_index} brute_fallback_start "
+                    f"crossings={len(output.code)} max_thread={max_thread}"
+                ),
             )
             brute = find_simplification(
                 output.code,
                 max_paths=-1,
                 ban_heuristic=True,
                 require_applicable=True,
+                max_thread=max_thread,
             )
             output.tested_red_paths += brute.tested_red_paths
             output.tested_green_paths += brute.tested_green_paths
@@ -1740,6 +2049,7 @@ def run_job(
     max_paths: int = -1,
     ban_heuristic: bool = False,
     reduction_round: int = -1,
+    max_thread: int = -1,
     known_crossingless_components: int = 0,
     removed_crossings: Optional[Sequence[int]] = None,
     verbose: bool = False,
@@ -1764,6 +2074,7 @@ def run_job(
             max_paths=max_paths,
             ban_heuristic=ban_heuristic,
             reduction_round=reduction_round,
+            max_thread=max_thread,
             verbose=verbose,
             progress=lambda message: print(
                 f"[pdcode-simplify] {job.label}: {message}", file=sys.stderr
@@ -1820,6 +2131,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", "-i", action="append", help="alias for --pd-file")
     parser.add_argument("--json", action="store_true", help="print JSON output")
     parser.add_argument("--max-paths", type=int, default=-1, help="green path cap, or -1 for heuristic sampling")
+    parser.add_argument(
+        "--max-thread",
+        type=int,
+        default=-1,
+        help="maximum brute-force worker processes, or -1 to choose automatically",
+    )
     parser.add_argument("--ban-heuristic", action="store_true",
                         help="with --max-paths -1, enumerate all green paths instead of heuristic sampling")
     parser.add_argument("--verbose", action="store_true", help="print progress logs to stderr")
@@ -1885,6 +2202,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
     if args.reduction_round < -1:
         parser.error("--reduction-round must be -1 or a non-negative integer")
+    if args.max_thread < -1 or args.max_thread == 0:
+        parser.error("--max-thread must be -1 or a positive integer")
     jobs = collect_jobs(args)
     removed_crossings = parse_removed_crossings(args.remove_crossings)
     show_labels = len(jobs) > 1
@@ -1899,6 +2218,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     max_paths=args.max_paths,
                     ban_heuristic=args.ban_heuristic,
                     reduction_round=args.reduction_round,
+                    max_thread=args.max_thread,
                     known_crossingless_components=args.known_crossingless_components,
                     removed_crossings=removed_crossings,
                     verbose=args.verbose,
@@ -1931,6 +2251,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     max_paths=args.max_paths,
                     ban_heuristic=args.ban_heuristic,
                     reduction_round=args.reduction_round,
+                    max_thread=args.max_thread,
                     known_crossingless_components=args.known_crossingless_components,
                     removed_crossings=removed_crossings,
                     verbose=args.verbose,

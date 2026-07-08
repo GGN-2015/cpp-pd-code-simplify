@@ -404,6 +404,7 @@ def _load_library() -> ctypes.CDLL:
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_int,
+        ctypes.c_int,
         ctypes.c_ulonglong,
         ctypes.POINTER(ctypes.c_int),
         ctypes.c_ulonglong,
@@ -422,12 +423,15 @@ def _run_one(
     max_paths: int = -1,
     ban_heuristic: bool = False,
     reduction_round: int = -1,
+    max_thread: int = -1,
     verbose: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
 ) -> dict[str, Any]:
     if reduction_round < -1:
         raise ValueError("reduction_round must be -1 or a non-negative integer")
+    if max_thread < -1 or max_thread == 0:
+        raise ValueError("max_thread must be -1 or a positive integer")
     library = _load_library()
     removed_count = 0 if remove_crossings is None else len(remove_crossings)
     removed_array = None
@@ -439,6 +443,7 @@ def _run_one(
         int(max_paths),
         1 if ban_heuristic else 0,
         int(reduction_round),
+        int(max_thread),
         1 if verbose else 0,
         int(known_crossingless_components),
         removed_array,
@@ -466,6 +471,7 @@ def simplify(
     max_paths: int = -1,
     ban_heuristic: bool = False,
     reduction_round: int = -1,
+    max_thread: int = -1,
     verbose: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
@@ -477,6 +483,7 @@ def simplify(
         max_paths=max_paths,
         ban_heuristic=ban_heuristic,
         reduction_round=reduction_round,
+        max_thread=max_thread,
         verbose=verbose,
         known_crossingless_components=known_crossingless_components,
         remove_crossings=remove_crossings,
@@ -489,6 +496,7 @@ def simplify_many(
     max_paths: int = -1,
     ban_heuristic: bool = False,
     reduction_round: int = -1,
+    max_thread: int = -1,
     verbose: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
@@ -501,6 +509,7 @@ def simplify_many(
             max_paths=max_paths,
             ban_heuristic=ban_heuristic,
             reduction_round=reduction_round,
+            max_thread=max_thread,
             verbose=verbose,
             known_crossingless_components=known_crossingless_components,
             remove_crossings=remove_crossings,
@@ -517,12 +526,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--max-paths", type=int, default=-1)
     parser.add_argument("--ban-heuristic", action="store_true")
     parser.add_argument("--reduction-round", type=int, default=-1)
+    parser.add_argument("--max-thread", type=int, default=-1)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--known-crossingless-components", type=int, default=0)
     parser.add_argument("--remove-crossings", help="comma-separated zero-based crossing indices")
     args = parser.parse_args(argv)
     if args.reduction_round < -1:
         parser.error("--reduction-round must be -1 or a non-negative integer")
+    if args.max_thread < -1 or args.max_thread == 0:
+        parser.error("--max-thread must be -1 or a positive integer")
     if args.pd_code and args.pd_code_option:
         parser.error("pass either a positional PD code or --pd-code, not both")
     pd_code_text = args.pd_code_option or args.pd_code
@@ -546,6 +558,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     max_paths=args.max_paths,
                     ban_heuristic=args.ban_heuristic,
                     reduction_round=args.reduction_round,
+                    max_thread=args.max_thread,
                     verbose=args.verbose,
                     known_crossingless_components=args.known_crossingless_components,
                     remove_crossings=remove_crossings,
@@ -566,6 +579,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             max_paths=args.max_paths,
             ban_heuristic=args.ban_heuristic,
             reduction_round=args.reduction_round,
+            max_thread=args.max_thread,
             verbose=args.verbose,
             known_crossingless_components=args.known_crossingless_components,
             remove_crossings=remove_crossings,

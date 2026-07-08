@@ -1,7 +1,8 @@
 {
   "max_paths": -1,
   "reduction_round": -1,
-  "repeat": 3,
+  "max_thread": 16,
+  "repeat": 1,
   "suite": "original",
   "ban_heuristic": true,
   "verbose": false,
@@ -13,10 +14,12 @@
       "case_count": 8,
       "engine": "cpp",
       "repeat": 1,
-      "time_seconds": 1.1391466001514345,
-      "avg_time_per_case_seconds": 0.14239332501892932,
-      "peak_rss_mib": 5.37109375,
-      "return_code": 0
+      "time_seconds": 0.350618900032714,
+      "avg_time_per_case_seconds": 0.04382736250408925,
+      "peak_rss_mib": 11.68359375,
+      "return_code": 0,
+      "result_count": 8,
+      "correctness_ok": true
     },
     {
       "case": "batch",
@@ -25,10 +28,12 @@
       "case_count": 8,
       "engine": "interface",
       "repeat": 1,
-      "time_seconds": 1.2505454001948237,
-      "avg_time_per_case_seconds": 0.15631817502435297,
-      "peak_rss_mib": 30.83203125,
-      "return_code": 0
+      "time_seconds": 0.5451154001057148,
+      "avg_time_per_case_seconds": 0.06813942501321435,
+      "peak_rss_mib": 36.58984375,
+      "return_code": 0,
+      "result_count": 8,
+      "correctness_ok": true
     },
     {
       "case": "batch",
@@ -37,82 +42,12 @@
       "case_count": 8,
       "engine": "python",
       "repeat": 1,
-      "time_seconds": 7.915733000030741,
-      "avg_time_per_case_seconds": 0.9894666250038426,
-      "peak_rss_mib": 27.15234375,
-      "return_code": 0
-    },
-    {
-      "case": "batch",
-      "family": "mixed",
-      "crossings": 90,
-      "case_count": 8,
-      "engine": "cpp",
-      "repeat": 2,
-      "time_seconds": 1.1347131000366062,
-      "avg_time_per_case_seconds": 0.14183913750457577,
-      "peak_rss_mib": 5.40625,
-      "return_code": 0
-    },
-    {
-      "case": "batch",
-      "family": "mixed",
-      "crossings": 90,
-      "case_count": 8,
-      "engine": "interface",
-      "repeat": 2,
-      "time_seconds": 1.247393999947235,
-      "avg_time_per_case_seconds": 0.15592424999340437,
-      "peak_rss_mib": 30.50390625,
-      "return_code": 0
-    },
-    {
-      "case": "batch",
-      "family": "mixed",
-      "crossings": 90,
-      "case_count": 8,
-      "engine": "python",
-      "repeat": 2,
-      "time_seconds": 8.01970270019956,
-      "avg_time_per_case_seconds": 1.002462837524945,
-      "peak_rss_mib": 27.15234375,
-      "return_code": 0
-    },
-    {
-      "case": "batch",
-      "family": "mixed",
-      "crossings": 90,
-      "case_count": 8,
-      "engine": "cpp",
-      "repeat": 3,
-      "time_seconds": 1.077226199908182,
-      "avg_time_per_case_seconds": 0.13465327498852275,
-      "peak_rss_mib": 5.47265625,
-      "return_code": 0
-    },
-    {
-      "case": "batch",
-      "family": "mixed",
-      "crossings": 90,
-      "case_count": 8,
-      "engine": "interface",
-      "repeat": 3,
-      "time_seconds": 1.2233124000485986,
-      "avg_time_per_case_seconds": 0.15291405000607483,
-      "peak_rss_mib": 30.60546875,
-      "return_code": 0
-    },
-    {
-      "case": "batch",
-      "family": "mixed",
-      "crossings": 90,
-      "case_count": 8,
-      "engine": "python",
-      "repeat": 3,
-      "time_seconds": 7.910671199904755,
-      "avg_time_per_case_seconds": 0.9888338999880943,
-      "peak_rss_mib": 27.16796875,
-      "return_code": 0
+      "time_seconds": 20.99678030004725,
+      "avg_time_per_case_seconds": 2.624597537505906,
+      "peak_rss_mib": 430.73828125,
+      "return_code": 0,
+      "result_count": 8,
+      "correctness_ok": true
     }
   ],
   "summary": [
@@ -122,11 +57,12 @@
       "crossings": 90,
       "case_count": 8,
       "engine": "cpp",
-      "runs": 3,
-      "avg_time_seconds": 1.1170286333654076,
-      "avg_time_per_case_seconds": 0.13962857917067595,
-      "avg_peak_rss_mib": 5.416666666666667,
-      "return_codes": "0"
+      "runs": 1,
+      "avg_time_seconds": 0.350618900032714,
+      "avg_time_per_case_seconds": 0.04382736250408925,
+      "avg_peak_rss_mib": 11.68359375,
+      "return_codes": "0",
+      "correctness": "ok"
     },
     {
       "case": "batch",
@@ -134,11 +70,12 @@
       "crossings": 90,
       "case_count": 8,
       "engine": "interface",
-      "runs": 3,
-      "avg_time_seconds": 1.2404172667302191,
-      "avg_time_per_case_seconds": 0.1550521583412774,
-      "avg_peak_rss_mib": 30.647135416666668,
-      "return_codes": "0"
+      "runs": 1,
+      "avg_time_seconds": 0.5451154001057148,
+      "avg_time_per_case_seconds": 0.06813942501321435,
+      "avg_peak_rss_mib": 36.58984375,
+      "return_codes": "0",
+      "correctness": "ok"
     },
     {
       "case": "batch",
@@ -146,28 +83,29 @@
       "crossings": 90,
       "case_count": 8,
       "engine": "python",
-      "runs": 3,
-      "avg_time_seconds": 7.948702300045018,
-      "avg_time_per_case_seconds": 0.9935877875056273,
-      "avg_peak_rss_mib": 27.157552083333332,
-      "return_codes": "0"
+      "runs": 1,
+      "avg_time_seconds": 20.99678030004725,
+      "avg_time_per_case_seconds": 2.624597537505906,
+      "avg_peak_rss_mib": 430.73828125,
+      "return_codes": "0",
+      "correctness": "ok"
     }
   ],
   "aggregate": {
     "cpp": {
-      "avg_time_seconds": 1.1170286333654076,
-      "avg_time_per_case_seconds": 0.13962857917067595,
-      "avg_peak_rss_mib": 5.416666666666667
+      "avg_time_seconds": 0.350618900032714,
+      "avg_time_per_case_seconds": 0.04382736250408925,
+      "avg_peak_rss_mib": 11.68359375
     },
     "interface": {
-      "avg_time_seconds": 1.2404172667302191,
-      "avg_time_per_case_seconds": 0.1550521583412774,
-      "avg_peak_rss_mib": 30.647135416666668
+      "avg_time_seconds": 0.5451154001057148,
+      "avg_time_per_case_seconds": 0.06813942501321435,
+      "avg_peak_rss_mib": 36.58984375
     },
     "python": {
-      "avg_time_seconds": 7.948702300045018,
-      "avg_time_per_case_seconds": 0.9935877875056273,
-      "avg_peak_rss_mib": 27.157552083333332
+      "avg_time_seconds": 20.99678030004725,
+      "avg_time_per_case_seconds": 2.624597537505906,
+      "avg_peak_rss_mib": 430.73828125
     }
   }
 }
