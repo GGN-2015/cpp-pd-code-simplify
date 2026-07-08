@@ -16,6 +16,9 @@ prototype:
 
 The Python prototype is intentionally not part of this repository.
 
+For a more detailed description of the algorithm and its correctness
+argument, see [Algorithm and Correctness](docs/algorithm-and-correctness.md).
+
 ## Build
 
 The project uses CMake and only the C++ standard library.
