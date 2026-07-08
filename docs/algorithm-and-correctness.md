@@ -52,6 +52,25 @@ code it receives. This keeps the mid-simplification search independently
 testable while the user-facing tools run the faster default preprocessing
 pipeline.
 
+## Final PD Formatting
+
+The simplification algorithms keep their internal crossing order and label
+numbering unchanged while searching and applying moves. At the final output
+boundary, `format_final_pd_code` converts the resulting diagram to a display
+form:
+
+- the existing component-orientation pass identifies the incoming endpoint of
+  each under strand;
+- each crossing tuple is rotated so entry `0` is that under-incoming endpoint
+  and entries `1`, `2`, and `3` continue around the crossing in the same local
+  order used by the rest of the library;
+- labels are then renumbered by walking the directed components, processing
+  components in increasing old-label order and assigning labels from `1`.
+
+This is only a relabeling and local cyclic reindexing of crossing endpoints.
+It does not change the pairing of PD labels, crossing signs, component count,
+or the result of the simplification search.
+
 ## Red Path Enumeration
 
 The simplification search starts from possible red boundary arcs. For each

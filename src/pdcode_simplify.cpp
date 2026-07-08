@@ -1873,28 +1873,68 @@ std::string format_final_pd_code(const PDCode& code) {
         return format_pd_code(code);
     }
 
-    bool has_label = false;
-    int minimum_label = 0;
-    for (const Crossing& crossing : code) {
-        for (int label : crossing) {
-            if (!has_label || label < minimum_label) {
-                minimum_label = label;
-                has_label = true;
+    const Diagram diagram(code);
+    PDCode oriented(code.size());
+    std::set<int> labels;
+    std::map<int, int> next_label;
+
+    auto label_at = [&](int crossing, int strand) {
+        const Endpoint other = diagram.crossings[crossing].adjacent[strand];
+        return diagram.code[other.crossing][other.strand];
+    };
+
+    for (int crossing = 0; crossing < static_cast<int>(code.size()); ++crossing) {
+        for (int strand = 0; strand < 4; ++strand) {
+            const int label = label_at(crossing, strand);
+            oriented[crossing][strand] = label;
+            labels.insert(label);
+        }
+
+        if (!diagram.crossings[crossing].directions[0][2]) {
+            throw std::invalid_argument("Could not orient final PD crossing from an under-incoming strand");
+        }
+        for (int tail = 0; tail < 4; ++tail) {
+            for (int head = 0; head < 4; ++head) {
+                if (!diagram.crossings[crossing].directions[tail][head]) {
+                    continue;
+                }
+                const int in_label = label_at(crossing, tail);
+                const int out_label = label_at(crossing, head);
+                const auto inserted = next_label.insert(std::make_pair(in_label, out_label));
+                if (!inserted.second && inserted.first->second != out_label) {
+                    throw std::invalid_argument("Final PD component orientation is inconsistent");
+                }
             }
         }
     }
-    if (!has_label || minimum_label == 1) {
-        return format_pd_code(code);
-    }
 
-    PDCode shifted = code;
-    const int offset = 1 - minimum_label;
-    for (Crossing& crossing : shifted) {
-        for (int& label : crossing) {
-            label += offset;
+    std::map<int, int> relabel;
+    int next_output_label = 1;
+    for (int start : labels) {
+        if (relabel.count(start) != 0) {
+            continue;
+        }
+
+        int current = start;
+        while (relabel.count(current) == 0) {
+            relabel[current] = next_output_label++;
+            const auto next = next_label.find(current);
+            if (next == next_label.end()) {
+                throw std::invalid_argument("Final PD component orientation is incomplete");
+            }
+            current = next->second;
+        }
+        if (current != start) {
+            throw std::invalid_argument("Final PD component orientation reached another component");
         }
     }
-    return format_pd_code(shifted);
+
+    for (Crossing& crossing : oriented) {
+        for (int& label : crossing) {
+            label = relabel.at(label);
+        }
+    }
+    return format_pd_code(oriented);
 }
 
 std::string format_endpoint(const Endpoint& endpoint) {

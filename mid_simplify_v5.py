@@ -249,20 +249,6 @@ def format_pd_code(code: PDCode) -> str:
     return "PD[" + ",".join(parts) + "]"
 
 
-def format_final_pd_code(code: PDCode) -> str:
-    if not code:
-        return format_pd_code(code)
-    minimum_label = min(label for crossing in code for label in crossing)
-    if minimum_label == 1:
-        return format_pd_code(code)
-    offset = 1 - minimum_label
-    shifted = [
-        tuple(label + offset for label in crossing)
-        for crossing in code
-    ]
-    return format_pd_code(shifted)
-
-
 def compact_text(text: str) -> str:
     return "".join(ch for ch in text if not ch.isspace())
 
@@ -436,6 +422,60 @@ class Diagram:
             for b in range(4):
                 if old_directions[a][b]:
                     self.directions[crossing][(a + 2) % 4][(b + 2) % 4] = True
+
+
+def format_final_pd_code(code: PDCode) -> str:
+    if not code:
+        return format_pd_code(code)
+
+    diagram = Diagram(code)
+
+    def label_at(crossing: int, strand: int) -> int:
+        other = diagram.adjacent[crossing][strand]
+        return diagram.code[other.crossing][other.strand]
+
+    oriented: List[Tuple[int, int, int, int]] = []
+    labels: Set[int] = set()
+    next_label: Dict[int, int] = {}
+
+    for crossing in range(len(code)):
+        row = tuple(label_at(crossing, strand) for strand in range(4))
+        oriented.append(row)  # type: ignore[arg-type]
+        labels.update(row)
+
+        if not diagram.directions[crossing][0][2]:
+            raise ValueError("Could not orient final PD crossing from an under-incoming strand")
+        for tail in range(4):
+            for head in range(4):
+                if not diagram.directions[crossing][tail][head]:
+                    continue
+                in_label = label_at(crossing, tail)
+                out_label = label_at(crossing, head)
+                previous = next_label.get(in_label)
+                if previous is not None and previous != out_label:
+                    raise ValueError("Final PD component orientation is inconsistent")
+                next_label[in_label] = out_label
+
+    relabel: Dict[int, int] = {}
+    next_output_label = 1
+    for start in sorted(labels):
+        if start in relabel:
+            continue
+        current = start
+        while current not in relabel:
+            relabel[current] = next_output_label
+            next_output_label += 1
+            if current not in next_label:
+                raise ValueError("Final PD component orientation is incomplete")
+            current = next_label[current]
+        if current != start:
+            raise ValueError("Final PD component orientation reached another component")
+
+    canonical = [
+        tuple(relabel[label] for label in crossing)
+        for crossing in oriented
+    ]
+    return format_pd_code(canonical)
 
 
 @dataclass
