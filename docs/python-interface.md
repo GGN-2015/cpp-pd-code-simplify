@@ -8,6 +8,12 @@ distributions include the C++ source files, and the package compiles a cached
 local dynamic library on first use through `cpp-simple-interface`. Python calls
 that library through `ctypes`.
 
+The repository does not keep generated copies of the core C++ implementation
+inside the Python package tree. The custom Poetry build backend temporarily
+copies the current `src/pdcode_simplify.cpp` and public header into the package
+data directory, injects those files into the wheel and sdist, and then removes
+the temporary copies from the working tree.
+
 The interface uses the C++ library's default preprocessing pipeline: R1-move
 removal followed by nugatory-crossing removal before the mid-simplification
 search.

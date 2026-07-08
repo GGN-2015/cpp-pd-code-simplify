@@ -15,16 +15,11 @@ from poetry.core.masonry import api as poetry_api
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PROJECT_ROOT.parents[1]
 
-SOURCE_FILES = [
+EMBEDDED_SOURCE_FILES = [
     (
         REPO_ROOT / "src" / "pdcode_simplify.cpp",
         PROJECT_ROOT / "cpp_pd_code_simplify_interface" / "data" / "src" / "pdcode_simplify.cpp",
         "cpp_pd_code_simplify_interface/data/src/pdcode_simplify.cpp",
-    ),
-    (
-        PROJECT_ROOT / "cpp_pd_code_simplify_interface" / "data" / "src" / "native_interface.cpp",
-        PROJECT_ROOT / "cpp_pd_code_simplify_interface" / "data" / "src" / "native_interface.cpp",
-        "cpp_pd_code_simplify_interface/data/src/native_interface.cpp",
     ),
     (
         REPO_ROOT / "include" / "pdcode_simplify" / "pdcode_simplify.hpp",
@@ -38,15 +33,31 @@ SOURCE_FILES = [
     ),
 ]
 
+STATIC_SOURCE_FILES = [
+    (
+        PROJECT_ROOT / "cpp_pd_code_simplify_interface" / "data" / "src" / "native_interface.cpp",
+        PROJECT_ROOT / "cpp_pd_code_simplify_interface" / "data" / "src" / "native_interface.cpp",
+        "cpp_pd_code_simplify_interface/data/src/native_interface.cpp",
+    ),
+]
+
+SOURCE_FILES = EMBEDDED_SOURCE_FILES + STATIC_SOURCE_FILES
+
 
 def _sync_cpp_sources() -> None:
     missing = []
-    for source, target, _ in SOURCE_FILES:
+    for source, target, _ in EMBEDDED_SOURCE_FILES:
         if source.exists():
-            if source.resolve() != target.resolve():
+            if (
+                source.resolve() != target.resolve()
+                and (not target.exists() or source.read_bytes() != target.read_bytes())
+            ):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, target)
         elif not target.exists():
+            missing.append((source, target))
+    for source, target, _ in STATIC_SOURCE_FILES:
+        if not source.exists() and not target.exists():
             missing.append((source, target))
     if missing:
         details = ", ".join(f"{source} or {target}" for source, target in missing)
@@ -54,7 +65,7 @@ def _sync_cpp_sources() -> None:
 
 
 def _clean_cpp_sources() -> None:
-    for source, target, _ in SOURCE_FILES:
+    for source, target, _ in EMBEDDED_SOURCE_FILES:
         if source.exists() and target.exists() and source.resolve() != target.resolve():
             target.unlink()
 

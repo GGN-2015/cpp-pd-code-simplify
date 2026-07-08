@@ -14,6 +14,11 @@ use, the package compiles a cached local dynamic library through
 `cpp-simple-interface`; later calls reuse that library through `ctypes`. A C++14
 compiler compatible with `g++` must be available at runtime.
 
+The core C++ source and header are not stored as permanent generated copies in
+this subproject. The custom Poetry build backend syncs them from the repository
+root during `poetry build`, embeds them in the wheel and sdist, then removes the
+temporary copies from the working tree.
+
 Calls use the C++ library's default preprocessing pipeline: R1-move removal
 followed by nugatory-crossing removal, then iterative mid-simplification.
 

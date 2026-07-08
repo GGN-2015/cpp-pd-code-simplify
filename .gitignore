@@ -66,3 +66,7 @@ tests/pd_code.zip
 venv/
 __pycache__/
 *.py[cod]
+
+# Generated only while building the Python interface package.
+python_project/cpp-pd-code-simplify-interface/cpp_pd_code_simplify_interface/data/src/pdcode_simplify.cpp
+python_project/cpp-pd-code-simplify-interface/cpp_pd_code_simplify_interface/data/include/pdcode_simplify/pdcode_simplify.hpp
