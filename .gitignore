@@ -67,6 +67,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
-
-# Local reference scripts
-mid_simplify_v5.py
+.venv/
+venv/
+__pycache__/
+*.py[cod]

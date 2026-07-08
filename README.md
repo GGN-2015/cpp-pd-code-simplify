@@ -14,7 +14,9 @@ prototype:
 - search shorter green paths in the dual graph;
 - validate over/under consistency for the candidate disk.
 
-The Python prototype is intentionally not part of this repository.
+The repository also includes a refactored Python prototype in
+[`mid_simplify_v5.py`](mid_simplify_v5.py). It exposes the same core
+algorithm as an importable API and a CLI for differential testing.
 
 For a more detailed description of the algorithm and its correctness
 argument, see [Algorithm and Correctness](docs/algorithm-and-correctness.md).
@@ -80,6 +82,49 @@ pd_simplify --remove-crossings 0,1,2 "[(1,5,2,4),(3,1,4,6),(5,3,6,2)]"
 
 The process exits with code `0` when a witness is found, `1` when no witness
 is found, and `2` for invalid input or runtime errors.
+
+## Python Prototype
+
+Create a local virtual environment for the Python comparison tools:
+
+```sh
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements-dev.txt
+```
+
+On Linux and macOS, use `.venv/bin/python` instead of
+`.\.venv\Scripts\python`.
+
+Run the Python prototype directly:
+
+```sh
+python mid_simplify_v5.py --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
+```
+
+Use it as a Python API:
+
+```python
+import mid_simplify_v5 as simplify
+
+code = simplify.parse_pd_code("PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]")
+result = simplify.find_simplification(code, max_paths=100)
+print(result.found)
+```
+
+Differentially test the C++ executable and the Python implementation:
+
+```sh
+.\.venv\Scripts\python tools\compare_cpp_python.py --include-reference
+```
+
+Compare runtime and peak RSS memory usage:
+
+```sh
+.\.venv\Scripts\python tools\benchmark_cpp_python.py
+```
+
+The latest local comparison summary is in
+[Python and C++ Comparison](docs/python-cpp-comparison.md).
 
 ## Library Use
 
