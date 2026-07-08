@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import mid_simplify_v5 as pysimplify  # noqa: E402
+from benchmark_dataset import BENCHMARK_CASES  # noqa: E402
 
 
 REFERENCE_PD = """PD[
@@ -56,6 +57,9 @@ def load_cases(args: argparse.Namespace) -> Dict[str, str]:
     cases = dict(BUILTIN_CASES)
     if args.include_reference:
         cases["reference-31"] = REFERENCE_PD
+    if args.include_benchmark:
+        for case in BENCHMARK_CASES:
+            cases[f"benchmark:{case.name}"] = case.pd_text
     for literal in args.pd_code or []:
         for job in pysimplify.parse_pd_document(literal, "command-line"):
             cases[job.label] = pysimplify.format_pd_code(job.code)
@@ -95,6 +99,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cpp-exe", default=None, help="path to pd_simplify executable")
     parser.add_argument("--max-paths", type=int, default=100)
     parser.add_argument("--include-reference", action="store_true", help="include the 31-crossing reference case")
+    parser.add_argument("--include-benchmark", action="store_true", help="include the deterministic benchmark dataset")
     parser.add_argument("--pd-code", action="append", help="additional literal PD[...] case")
     parser.add_argument("--pd-file", action="append", help="additional PD input file")
     args = parser.parse_args(argv)

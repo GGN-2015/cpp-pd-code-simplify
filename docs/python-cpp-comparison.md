@@ -6,40 +6,33 @@ search:
 - C++ executable: `pd_simplify`
 - Python prototype: `mid_simplify_v5.py`
 
+## Differential Testing
+
 The differential test runner compares their JSON outputs exactly:
 
 ```sh
 .\.venv\Scripts\python tools\compare_cpp_python.py --include-reference
 ```
 
-On the local Windows development machine, this command matched all bundled
-cases:
-
-```text
-[OK] unknot: found=False
-[OK] trefoil: found=False
-[OK] figure-eight: found=False
-[OK] cinquefoil: found=False
-[OK] reference-31: found=True
-All 5 cases matched.
-```
-
-The benchmark runner measures wall-clock time and peak RSS:
+To compare every deterministic benchmark input as well:
 
 ```sh
-.\.venv\Scripts\python tools\benchmark_cpp_python.py
+.\.venv\Scripts\python tools\compare_cpp_python.py --include-benchmark
 ```
 
-One local run produced:
+On Linux and macOS, use `.venv/bin/python` instead of
+`.\.venv\Scripts\python`.
 
-| Case | Engine | Time (s) | Peak RSS (MiB) | Return |
-| --- | --- | ---: | ---: | ---: |
-| trefoil | C++ | 0.020731 | 2.750 | 1 |
-| trefoil | Python | 0.090680 | 21.727 | 1 |
-| figure-eight | C++ | 0.018080 | 2.750 | 1 |
-| figure-eight | Python | 0.103301 | 22.090 | 1 |
-| reference-31 | C++ | 7.019658 | 5.789 | 0 |
-| reference-31 | Python | 32.406291 | 22.879 | 0 |
+Return code `0` from either simplifier means a simplification witness was
+found. Return code `1` means the run completed normally but found no witness.
 
-Return code `0` means a simplification witness was found. Return code `1`
-means the run completed normally but found no witness.
+## Benchmarking
+
+Use the benchmark runner to measure wall-clock time and peak RSS:
+
+```sh
+.\.venv\Scripts\python tools\benchmark_cpp_python.py --repeat 3
+```
+
+The benchmark dataset, chart-generation command, committed PNG chart, and
+current local results are documented in [Benchmarking](benchmarking.md).

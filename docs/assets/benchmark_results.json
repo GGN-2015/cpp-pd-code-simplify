@@ -1,0 +1,658 @@
+{
+  "max_paths": 100,
+  "repeat": 3,
+  "raw": [
+    {
+      "case": "3_1_trefoil",
+      "family": "prime seed",
+      "crossings": 3,
+      "engine": "cpp",
+      "repeat": 1,
+      "time_seconds": 0.029339700005948544,
+      "peak_rss_mib": 5.58203125,
+      "return_code": 1
+    },
+    {
+      "case": "3_1_trefoil",
+      "family": "prime seed",
+      "crossings": 3,
+      "engine": "python",
+      "repeat": 1,
+      "time_seconds": 0.07604159996844828,
+      "peak_rss_mib": 21.8125,
+      "return_code": 1
+    },
+    {
+      "case": "3_1_trefoil",
+      "family": "prime seed",
+      "crossings": 3,
+      "engine": "cpp",
+      "repeat": 2,
+      "time_seconds": 0.024221900152042508,
+      "peak_rss_mib": 5.546875,
+      "return_code": 1
+    },
+    {
+      "case": "3_1_trefoil",
+      "family": "prime seed",
+      "crossings": 3,
+      "engine": "python",
+      "repeat": 2,
+      "time_seconds": 0.08715389994904399,
+      "peak_rss_mib": 21.58203125,
+      "return_code": 1
+    },
+    {
+      "case": "3_1_trefoil",
+      "family": "prime seed",
+      "crossings": 3,
+      "engine": "cpp",
+      "repeat": 3,
+      "time_seconds": 0.023991699796169996,
+      "peak_rss_mib": 5.62890625,
+      "return_code": 1
+    },
+    {
+      "case": "3_1_trefoil",
+      "family": "prime seed",
+      "crossings": 3,
+      "engine": "python",
+      "repeat": 3,
+      "time_seconds": 0.09273410006426275,
+      "peak_rss_mib": 20.97265625,
+      "return_code": 1
+    },
+    {
+      "case": "4_1_figure_eight",
+      "family": "prime seed",
+      "crossings": 4,
+      "engine": "cpp",
+      "repeat": 1,
+      "time_seconds": 0.027685899985954165,
+      "peak_rss_mib": 5.09375,
+      "return_code": 1
+    },
+    {
+      "case": "4_1_figure_eight",
+      "family": "prime seed",
+      "crossings": 4,
+      "engine": "python",
+      "repeat": 1,
+      "time_seconds": 0.07249960000626743,
+      "peak_rss_mib": 22.34765625,
+      "return_code": 1
+    },
+    {
+      "case": "4_1_figure_eight",
+      "family": "prime seed",
+      "crossings": 4,
+      "engine": "cpp",
+      "repeat": 2,
+      "time_seconds": 0.02536369999870658,
+      "peak_rss_mib": 5.66015625,
+      "return_code": 1
+    },
+    {
+      "case": "4_1_figure_eight",
+      "family": "prime seed",
+      "crossings": 4,
+      "engine": "python",
+      "repeat": 2,
+      "time_seconds": 0.0923333999235183,
+      "peak_rss_mib": 21.2578125,
+      "return_code": 1
+    },
+    {
+      "case": "4_1_figure_eight",
+      "family": "prime seed",
+      "crossings": 4,
+      "engine": "cpp",
+      "repeat": 3,
+      "time_seconds": 0.026125599863007665,
+      "peak_rss_mib": 5.66796875,
+      "return_code": 1
+    },
+    {
+      "case": "4_1_figure_eight",
+      "family": "prime seed",
+      "crossings": 4,
+      "engine": "python",
+      "repeat": 3,
+      "time_seconds": 0.07057090010493994,
+      "peak_rss_mib": 22.38671875,
+      "return_code": 1
+    },
+    {
+      "case": "5_1_torus",
+      "family": "torus family",
+      "crossings": 5,
+      "engine": "cpp",
+      "repeat": 1,
+      "time_seconds": 0.026757000014185905,
+      "peak_rss_mib": 5.5625,
+      "return_code": 1
+    },
+    {
+      "case": "5_1_torus",
+      "family": "torus family",
+      "crossings": 5,
+      "engine": "python",
+      "repeat": 1,
+      "time_seconds": 0.09191900002770126,
+      "peak_rss_mib": 21.90234375,
+      "return_code": 1
+    },
+    {
+      "case": "5_1_torus",
+      "family": "torus family",
+      "crossings": 5,
+      "engine": "cpp",
+      "repeat": 2,
+      "time_seconds": 0.025765500031411648,
+      "peak_rss_mib": 5.5625,
+      "return_code": 1
+    },
+    {
+      "case": "5_1_torus",
+      "family": "torus family",
+      "crossings": 5,
+      "engine": "python",
+      "repeat": 2,
+      "time_seconds": 0.07478729984723032,
+      "peak_rss_mib": 20.515625,
+      "return_code": 1
+    },
+    {
+      "case": "5_1_torus",
+      "family": "torus family",
+      "crossings": 5,
+      "engine": "cpp",
+      "repeat": 3,
+      "time_seconds": 0.022818199824541807,
+      "peak_rss_mib": 5.65625,
+      "return_code": 1
+    },
+    {
+      "case": "5_1_torus",
+      "family": "torus family",
+      "crossings": 5,
+      "engine": "python",
+      "repeat": 3,
+      "time_seconds": 0.11087589990347624,
+      "peak_rss_mib": 22.1015625,
+      "return_code": 1
+    },
+    {
+      "case": "7_1_torus",
+      "family": "torus family",
+      "crossings": 7,
+      "engine": "cpp",
+      "repeat": 1,
+      "time_seconds": 0.023364000022411346,
+      "peak_rss_mib": 5.36328125,
+      "return_code": 1
+    },
+    {
+      "case": "7_1_torus",
+      "family": "torus family",
+      "crossings": 7,
+      "engine": "python",
+      "repeat": 1,
+      "time_seconds": 0.09344540000893176,
+      "peak_rss_mib": 22.16796875,
+      "return_code": 1
+    },
+    {
+      "case": "7_1_torus",
+      "family": "torus family",
+      "crossings": 7,
+      "engine": "cpp",
+      "repeat": 2,
+      "time_seconds": 0.024899200070649385,
+      "peak_rss_mib": 5.57421875,
+      "return_code": 1
+    },
+    {
+      "case": "7_1_torus",
+      "family": "torus family",
+      "crossings": 7,
+      "engine": "python",
+      "repeat": 2,
+      "time_seconds": 0.11039160005748272,
+      "peak_rss_mib": 22.5,
+      "return_code": 1
+    },
+    {
+      "case": "7_1_torus",
+      "family": "torus family",
+      "crossings": 7,
+      "engine": "cpp",
+      "repeat": 3,
+      "time_seconds": 0.0252706001047045,
+      "peak_rss_mib": 5.578125,
+      "return_code": 1
+    },
+    {
+      "case": "7_1_torus",
+      "family": "torus family",
+      "crossings": 7,
+      "engine": "python",
+      "repeat": 3,
+      "time_seconds": 0.1288884999230504,
+      "peak_rss_mib": 22.5,
+      "return_code": 1
+    },
+    {
+      "case": "9_1_torus",
+      "family": "torus family",
+      "crossings": 9,
+      "engine": "cpp",
+      "repeat": 1,
+      "time_seconds": 0.04422249994240701,
+      "peak_rss_mib": 5.59765625,
+      "return_code": 1
+    },
+    {
+      "case": "9_1_torus",
+      "family": "torus family",
+      "crossings": 9,
+      "engine": "python",
+      "repeat": 1,
+      "time_seconds": 0.16465900000184774,
+      "peak_rss_mib": 22.26171875,
+      "return_code": 1
+    },
+    {
+      "case": "9_1_torus",
+      "family": "torus family",
+      "crossings": 9,
+      "engine": "cpp",
+      "repeat": 2,
+      "time_seconds": 0.04216969991102815,
+      "peak_rss_mib": 5.59375,
+      "return_code": 1
+    },
+    {
+      "case": "9_1_torus",
+      "family": "torus family",
+      "crossings": 9,
+      "engine": "python",
+      "repeat": 2,
+      "time_seconds": 0.16504049999639392,
+      "peak_rss_mib": 22.57421875,
+      "return_code": 1
+    },
+    {
+      "case": "9_1_torus",
+      "family": "torus family",
+      "crossings": 9,
+      "engine": "cpp",
+      "repeat": 3,
+      "time_seconds": 0.04078160016797483,
+      "peak_rss_mib": 5.6015625,
+      "return_code": 1
+    },
+    {
+      "case": "9_1_torus",
+      "family": "torus family",
+      "crossings": 9,
+      "engine": "python",
+      "repeat": 3,
+      "time_seconds": 0.17770589981228113,
+      "peak_rss_mib": 22.53125,
+      "return_code": 1
+    },
+    {
+      "case": "trefoil_r1x12",
+      "family": "inflated",
+      "crossings": 15,
+      "engine": "cpp",
+      "repeat": 1,
+      "time_seconds": 0.02743739983998239,
+      "peak_rss_mib": 5.66796875,
+      "return_code": 0
+    },
+    {
+      "case": "trefoil_r1x12",
+      "family": "inflated",
+      "crossings": 15,
+      "engine": "python",
+      "repeat": 1,
+      "time_seconds": 0.10087210009805858,
+      "peak_rss_mib": 21.53125,
+      "return_code": 0
+    },
+    {
+      "case": "trefoil_r1x12",
+      "family": "inflated",
+      "crossings": 15,
+      "engine": "cpp",
+      "repeat": 2,
+      "time_seconds": 0.02553649991750717,
+      "peak_rss_mib": 5.671875,
+      "return_code": 0
+    },
+    {
+      "case": "trefoil_r1x12",
+      "family": "inflated",
+      "crossings": 15,
+      "engine": "python",
+      "repeat": 2,
+      "time_seconds": 0.09495029994286597,
+      "peak_rss_mib": 21.9375,
+      "return_code": 0
+    },
+    {
+      "case": "trefoil_r1x12",
+      "family": "inflated",
+      "crossings": 15,
+      "engine": "cpp",
+      "repeat": 3,
+      "time_seconds": 0.024715800071135163,
+      "peak_rss_mib": 5.66796875,
+      "return_code": 0
+    },
+    {
+      "case": "trefoil_r1x12",
+      "family": "inflated",
+      "crossings": 15,
+      "engine": "python",
+      "repeat": 3,
+      "time_seconds": 0.09702600003220141,
+      "peak_rss_mib": 21.84765625,
+      "return_code": 0
+    },
+    {
+      "case": "figure_eight_r1x12",
+      "family": "inflated",
+      "crossings": 16,
+      "engine": "cpp",
+      "repeat": 1,
+      "time_seconds": 0.027034299913793802,
+      "peak_rss_mib": 5.6640625,
+      "return_code": 0
+    },
+    {
+      "case": "figure_eight_r1x12",
+      "family": "inflated",
+      "crossings": 16,
+      "engine": "python",
+      "repeat": 1,
+      "time_seconds": 0.10233039990998805,
+      "peak_rss_mib": 20.8671875,
+      "return_code": 0
+    },
+    {
+      "case": "figure_eight_r1x12",
+      "family": "inflated",
+      "crossings": 16,
+      "engine": "cpp",
+      "repeat": 2,
+      "time_seconds": 0.025604699971154332,
+      "peak_rss_mib": 4.91015625,
+      "return_code": 0
+    },
+    {
+      "case": "figure_eight_r1x12",
+      "family": "inflated",
+      "crossings": 16,
+      "engine": "python",
+      "repeat": 2,
+      "time_seconds": 0.07431220007129014,
+      "peak_rss_mib": 21.34765625,
+      "return_code": 0
+    },
+    {
+      "case": "figure_eight_r1x12",
+      "family": "inflated",
+      "crossings": 16,
+      "engine": "cpp",
+      "repeat": 3,
+      "time_seconds": 0.011790100019425154,
+      "peak_rss_mib": 2.73046875,
+      "return_code": 0
+    },
+    {
+      "case": "figure_eight_r1x12",
+      "family": "inflated",
+      "crossings": 16,
+      "engine": "python",
+      "repeat": 3,
+      "time_seconds": 0.09498200006783009,
+      "peak_rss_mib": 20.73828125,
+      "return_code": 0
+    },
+    {
+      "case": "reference_31",
+      "family": "reference hard case",
+      "crossings": 31,
+      "engine": "cpp",
+      "repeat": 1,
+      "time_seconds": 1.2303653000853956,
+      "peak_rss_mib": 5.71484375,
+      "return_code": 0
+    },
+    {
+      "case": "reference_31",
+      "family": "reference hard case",
+      "crossings": 31,
+      "engine": "python",
+      "repeat": 1,
+      "time_seconds": 33.90132940001786,
+      "peak_rss_mib": 22.703125,
+      "return_code": 0
+    },
+    {
+      "case": "reference_31",
+      "family": "reference hard case",
+      "crossings": 31,
+      "engine": "cpp",
+      "repeat": 2,
+      "time_seconds": 1.1611760999076068,
+      "peak_rss_mib": 5.71484375,
+      "return_code": 0
+    },
+    {
+      "case": "reference_31",
+      "family": "reference hard case",
+      "crossings": 31,
+      "engine": "python",
+      "repeat": 2,
+      "time_seconds": 31.047657599905506,
+      "peak_rss_mib": 22.65625,
+      "return_code": 0
+    },
+    {
+      "case": "reference_31",
+      "family": "reference hard case",
+      "crossings": 31,
+      "engine": "cpp",
+      "repeat": 3,
+      "time_seconds": 1.3886080000083894,
+      "peak_rss_mib": 5.7109375,
+      "return_code": 0
+    },
+    {
+      "case": "reference_31",
+      "family": "reference hard case",
+      "crossings": 31,
+      "engine": "python",
+      "repeat": 3,
+      "time_seconds": 32.42496659979224,
+      "peak_rss_mib": 22.48828125,
+      "return_code": 0
+    }
+  ],
+  "summary": [
+    {
+      "case": "3_1_trefoil",
+      "family": "prime seed",
+      "crossings": 3,
+      "engine": "cpp",
+      "runs": 3,
+      "avg_time_seconds": 0.02585109998472035,
+      "avg_peak_rss_mib": 5.5859375,
+      "return_codes": "1"
+    },
+    {
+      "case": "3_1_trefoil",
+      "family": "prime seed",
+      "crossings": 3,
+      "engine": "python",
+      "runs": 3,
+      "avg_time_seconds": 0.085309866660585,
+      "avg_peak_rss_mib": 21.455729166666668,
+      "return_codes": "1"
+    },
+    {
+      "case": "4_1_figure_eight",
+      "family": "prime seed",
+      "crossings": 4,
+      "engine": "cpp",
+      "runs": 3,
+      "avg_time_seconds": 0.026391733282556135,
+      "avg_peak_rss_mib": 5.473958333333333,
+      "return_codes": "1"
+    },
+    {
+      "case": "4_1_figure_eight",
+      "family": "prime seed",
+      "crossings": 4,
+      "engine": "python",
+      "runs": 3,
+      "avg_time_seconds": 0.0784679666782419,
+      "avg_peak_rss_mib": 21.997395833333332,
+      "return_codes": "1"
+    },
+    {
+      "case": "5_1_torus",
+      "family": "torus family",
+      "crossings": 5,
+      "engine": "cpp",
+      "runs": 3,
+      "avg_time_seconds": 0.025113566623379786,
+      "avg_peak_rss_mib": 5.59375,
+      "return_codes": "1"
+    },
+    {
+      "case": "5_1_torus",
+      "family": "torus family",
+      "crossings": 5,
+      "engine": "python",
+      "runs": 3,
+      "avg_time_seconds": 0.09252739992613594,
+      "avg_peak_rss_mib": 21.506510416666668,
+      "return_codes": "1"
+    },
+    {
+      "case": "7_1_torus",
+      "family": "torus family",
+      "crossings": 7,
+      "engine": "cpp",
+      "runs": 3,
+      "avg_time_seconds": 0.02451126673258841,
+      "avg_peak_rss_mib": 5.505208333333333,
+      "return_codes": "1"
+    },
+    {
+      "case": "7_1_torus",
+      "family": "torus family",
+      "crossings": 7,
+      "engine": "python",
+      "runs": 3,
+      "avg_time_seconds": 0.11090849999648829,
+      "avg_peak_rss_mib": 22.389322916666668,
+      "return_codes": "1"
+    },
+    {
+      "case": "9_1_torus",
+      "family": "torus family",
+      "crossings": 9,
+      "engine": "cpp",
+      "runs": 3,
+      "avg_time_seconds": 0.04239126667380333,
+      "avg_peak_rss_mib": 5.59765625,
+      "return_codes": "1"
+    },
+    {
+      "case": "9_1_torus",
+      "family": "torus family",
+      "crossings": 9,
+      "engine": "python",
+      "runs": 3,
+      "avg_time_seconds": 0.16913513327017426,
+      "avg_peak_rss_mib": 22.455729166666668,
+      "return_codes": "1"
+    },
+    {
+      "case": "figure_eight_r1x12",
+      "family": "inflated",
+      "crossings": 16,
+      "engine": "cpp",
+      "runs": 3,
+      "avg_time_seconds": 0.021476366634791095,
+      "avg_peak_rss_mib": 4.434895833333333,
+      "return_codes": "0"
+    },
+    {
+      "case": "figure_eight_r1x12",
+      "family": "inflated",
+      "crossings": 16,
+      "engine": "python",
+      "runs": 3,
+      "avg_time_seconds": 0.09054153334970276,
+      "avg_peak_rss_mib": 20.984375,
+      "return_codes": "0"
+    },
+    {
+      "case": "reference_31",
+      "family": "reference hard case",
+      "crossings": 31,
+      "engine": "cpp",
+      "runs": 3,
+      "avg_time_seconds": 1.2600498000004638,
+      "avg_peak_rss_mib": 5.713541666666667,
+      "return_codes": "0"
+    },
+    {
+      "case": "reference_31",
+      "family": "reference hard case",
+      "crossings": 31,
+      "engine": "python",
+      "runs": 3,
+      "avg_time_seconds": 32.45798453323854,
+      "avg_peak_rss_mib": 22.615885416666668,
+      "return_codes": "0"
+    },
+    {
+      "case": "trefoil_r1x12",
+      "family": "inflated",
+      "crossings": 15,
+      "engine": "cpp",
+      "runs": 3,
+      "avg_time_seconds": 0.025896566609541576,
+      "avg_peak_rss_mib": 5.669270833333333,
+      "return_codes": "0"
+    },
+    {
+      "case": "trefoil_r1x12",
+      "family": "inflated",
+      "crossings": 15,
+      "engine": "python",
+      "runs": 3,
+      "avg_time_seconds": 0.09761613335770865,
+      "avg_peak_rss_mib": 21.772135416666668,
+      "return_codes": "0"
+    }
+  ],
+  "aggregate": {
+    "cpp": {
+      "avg_time_seconds": 0.18146020831773058,
+      "avg_peak_rss_mib": 5.44677734375
+    },
+    "python": {
+      "avg_time_seconds": 4.147811383309697,
+      "avg_peak_rss_mib": 21.897135416666668
+    }
+  }
+}

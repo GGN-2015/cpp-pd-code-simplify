@@ -37,11 +37,19 @@ python -m venv .venv
 On Linux and macOS, use `.venv/bin/python` instead of
 `.\.venv\Scripts\python`.
 
+## Benchmark Snapshot
+
+![C++ and Python benchmark bar chart](docs/assets/benchmark_cpp_python.png)
+
+This local run uses the deterministic benchmark set documented in
+[Benchmarking](docs/benchmarking.md).
+
 ## Documentation
 
 - [Command-line interface](docs/cli.md)
 - [Python prototype and comparison tools](docs/python.md)
 - [Algorithm and correctness](docs/algorithm-and-correctness.md)
+- [Benchmarking](docs/benchmarking.md)
 - [Python and C++ comparison results](docs/python-cpp-comparison.md)
 
 ## Notes
