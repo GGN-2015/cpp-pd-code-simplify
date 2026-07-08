@@ -136,8 +136,6 @@ The library therefore tracks component metadata separately:
 - `analyze_components_after_removing_crossings` simulates crossing deletion
   and increments `crossingless_components` for each component that loses all
   crossing indices;
-- `simplify_reidemeister_i_ii` preserves this count while removing
-  Reidemeister I and II patterns.
 - `simplify_pd_code` preserves this count while removing R1 moves and
   nugatory crossings before the mid-simplification search.
 
@@ -199,9 +197,10 @@ so the total number of link components is not lost.
 
 The test suite includes deterministic randomized tests for trefoil,
 figure-eight, and cinquefoil fixtures. For each fixture, the test generator
-applies inverse Reidemeister I and II moves to increase the crossing count
-without changing the link type. The Reidemeister simplifier must then reduce
-the diagram back to the original crossing count.
+applies inverse Reidemeister I moves to increase the crossing count without
+changing the link type. The default preprocessing stage must then reduce the
+diagram back to the original crossing count by removing R1 moves and any
+nugatory crossings it exposes.
 
 These tests do not prove minimality for arbitrary input. They do verify that
 the implementation can survive nontrivial random diagram growth while

@@ -87,13 +87,6 @@ struct RandomInflationResult {
     int type_ii_moves = 0;
 };
 
-struct ReidemeisterSimplificationResult {
-    PDCode code;
-    std::size_t crossingless_components = 0;
-    int type_i_moves = 0;
-    int type_ii_moves = 0;
-};
-
 struct PDSimplificationResult {
     PDCode code;
     std::size_t crossingless_components = 0;
@@ -152,10 +145,6 @@ PDCODE_SIMPLIFY_API std::size_t count_crossingless_components_after_removing_cro
 PDCODE_SIMPLIFY_API RandomInflationResult randomly_increase_crossings(
     const PDCode& code,
     const RandomInflationOptions& options = RandomInflationOptions{});
-
-PDCODE_SIMPLIFY_API ReidemeisterSimplificationResult simplify_reidemeister_i_ii(
-    const PDCode& code,
-    std::size_t known_crossingless_components = 0);
 
 PDCODE_SIMPLIFY_API PDSimplificationResult simplify_pd_code(
     const PDCode& code,

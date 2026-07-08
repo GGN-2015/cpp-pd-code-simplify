@@ -101,7 +101,7 @@ void test_crossingless_component_count_after_removal() {
             "an explicitly tracked empty unknot should be counted");
 
     const auto kink = pdcode_simplify::parse_pd_code("[(0,0,1,1)]");
-    const auto simplified_kink = pdcode_simplify::simplify_reidemeister_i_ii(kink);
+    const auto simplified_kink = pdcode_simplify::simplify_pd_code(kink);
     require(simplified_kink.code.empty(),
             "a one-crossing kink should simplify to an empty PD code");
     require(simplified_kink.crossingless_components == 1,
@@ -116,7 +116,7 @@ void test_crossingless_component_count_after_removal() {
             "default PD simplification should preserve the crossingless kink component");
 }
 
-void test_reidemeister_random_inflate_then_simplify() {
+void test_r1_random_inflate_then_pre_simplify() {
     struct Sample {
         const char* name;
         const char* pd;
@@ -152,7 +152,7 @@ void test_reidemeister_random_inflate_then_simplify() {
             pdcode_simplify::RandomInflationOptions options;
             options.moves = 18;
             options.seed = seed * 97U + static_cast<unsigned int>(sample.minimal_crossings);
-            options.type_ii_percentage = 60;
+            options.type_ii_percentage = 0;
 
             const auto inflated = pdcode_simplify::randomly_increase_crossings(base, options);
             require(inflated.code.size() > base.size(),
@@ -160,13 +160,13 @@ void test_reidemeister_random_inflate_then_simplify() {
             require(pdcode_simplify::analyze_components(inflated.code).total_components() == 1,
                     std::string(sample.name) + " random inflation should preserve the component count");
 
-            const auto simplified = pdcode_simplify::simplify_reidemeister_i_ii(inflated.code);
+            const auto simplified = pdcode_simplify::simplify_pd_code(inflated.code);
             require(simplified.code.size() == base.size(),
                     std::string(sample.name) + " should simplify back to its original crossing count");
             require(simplified.crossingless_components == 0,
                     std::string(sample.name) + " simplification should not invent crossingless components");
-            require(simplified.type_i_moves + simplified.type_ii_moves > 0,
-                    std::string(sample.name) + " should use at least one Reidemeister simplification");
+            require(simplified.reidemeister_i_moves > 0,
+                    std::string(sample.name) + " should use at least one R1 simplification");
         }
     }
 }
@@ -229,7 +229,7 @@ int main() {
         test_common_knot_components();
         test_link_components();
         test_crossingless_component_count_after_removal();
-        test_reidemeister_random_inflate_then_simplify();
+        test_r1_random_inflate_then_pre_simplify();
         test_reference_sample();
         std::cout << "All tests passed\n";
         return EXIT_SUCCESS;

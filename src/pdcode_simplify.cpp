@@ -110,31 +110,6 @@ void replace_label(PDCode& code, int old_label, int new_label) {
     }
 }
 
-void erase_crossings(PDCode& code, int first, int second = -1) {
-    if (second >= 0 && first > second) {
-        std::swap(first, second);
-    }
-    if (second >= 0) {
-        code.erase(code.begin() + second);
-    }
-    code.erase(code.begin() + first);
-}
-
-int label_occurrences_outside(const PDCode& code, int label, const std::set<int>& removed_crossings) {
-    int count = 0;
-    for (int crossing_index = 0; crossing_index < static_cast<int>(code.size()); ++crossing_index) {
-        if (removed_crossings.count(crossing_index) != 0) {
-            continue;
-        }
-        for (int strand = 0; strand < 4; ++strand) {
-            if (code[crossing_index][strand] == label) {
-                ++count;
-            }
-        }
-    }
-    return count;
-}
-
 int unique_label_count(const Crossing& crossing) {
     return static_cast<int>(std::set<int>(crossing.begin(), crossing.end()).size());
 }
@@ -2040,106 +2015,6 @@ bool apply_reverse_type_ii(PDCode& code, std::mt19937& rng) {
     return false;
 }
 
-bool apply_type_i_simplification(
-    PDCode& code,
-    std::size_t& crossingless_components,
-    int& type_i_moves) {
-    for (int crossing_index = 0; crossing_index < static_cast<int>(code.size()); ++crossing_index) {
-        const Crossing crossing = code[crossing_index];
-        for (int i = 0; i < 4; ++i) {
-            if (crossing[i] != crossing[(i + 1) % 4]) {
-                continue;
-            }
-
-            const ComponentAnalysis after_removal =
-                analyze_components_after_removing_crossings(
-                    code, std::vector<int>{crossing_index}, crossingless_components);
-            const int keep_label = crossing[(i + 2) % 4];
-            const int merge_label = crossing[(i + 3) % 4];
-            const std::set<int> removed{crossing_index};
-            if (keep_label == merge_label) {
-                if (label_occurrences_outside(code, keep_label, removed) != 0) {
-                    continue;
-                }
-            } else if (label_occurrences_outside(code, keep_label, removed) != 1 ||
-                       label_occurrences_outside(code, merge_label, removed) != 1) {
-                continue;
-            }
-
-            crossingless_components = after_removal.crossingless_components;
-            erase_crossings(code, crossing_index);
-            replace_label(code, merge_label, keep_label);
-            ++type_i_moves;
-            return true;
-        }
-    }
-    return false;
-}
-
-bool apply_type_ii_simplification(
-    PDCode& code,
-    std::size_t& crossingless_components,
-    int& type_ii_moves) {
-    if (code.size() < 2) {
-        return false;
-    }
-
-    const LabelMap labels = build_label_map(code);
-    for (int first_crossing = 0; first_crossing < static_cast<int>(code.size()); ++first_crossing) {
-        for (int a = 0; a < 4; ++a) {
-            const Endpoint first_mate =
-                mate_endpoint(code, labels, Endpoint{first_crossing, a});
-            const Endpoint second_mate =
-                mate_endpoint(code, labels, Endpoint{first_crossing, (a + 1) % 4});
-            const int second_crossing = first_mate.crossing;
-            if (second_crossing == first_crossing || second_crossing != second_mate.crossing) {
-                continue;
-            }
-
-            const int b = first_mate.strand;
-            const int c = second_mate.strand;
-            if (positive_mod(b - 1, 4) != c || (a + b) % 2 != 0) {
-                continue;
-            }
-
-            const Crossing first = code[first_crossing];
-            const Crossing second = code[second_crossing];
-            const int keep_first = first[(a + 2) % 4];
-            const int merge_first = second[(b + 2) % 4];
-            const int keep_second = first[(a + 3) % 4];
-            const int merge_second = second[(b + 1) % 4];
-            const std::set<int> boundary_labels{
-                keep_first,
-                merge_first,
-                keep_second,
-                merge_second};
-            const std::set<int> removed_crossings{first_crossing, second_crossing};
-            if (boundary_labels.size() != 4 ||
-                label_occurrences_outside(code, keep_first, removed_crossings) != 1 ||
-                label_occurrences_outside(code, merge_first, removed_crossings) != 1 ||
-                label_occurrences_outside(code, keep_second, removed_crossings) != 1 ||
-                label_occurrences_outside(code, merge_second, removed_crossings) != 1) {
-                continue;
-            }
-
-            const ComponentAnalysis after_removal =
-                analyze_components_after_removing_crossings(
-                    code,
-                    std::vector<int>{first_crossing, second_crossing},
-                    crossingless_components);
-            crossingless_components = after_removal.crossingless_components;
-
-            erase_crossings(code, first_crossing, second_crossing);
-            replace_label(code, merge_first, keep_first);
-            replace_label(code, merge_second, keep_second);
-            ++type_ii_moves;
-            return true;
-        }
-    }
-
-    return false;
-}
-
 RandomInflationResult randomly_increase_crossings(
     const PDCode& code,
     const RandomInflationOptions& options) {
@@ -2167,28 +2042,6 @@ RandomInflationResult randomly_increase_crossings(
         } else {
             throw std::runtime_error("Could not apply any random crossing-increasing move");
         }
-    }
-
-    return result;
-}
-
-ReidemeisterSimplificationResult simplify_reidemeister_i_ii(
-    const PDCode& code,
-    std::size_t known_crossingless_components) {
-    ReidemeisterSimplificationResult result;
-    result.code = code;
-    result.crossingless_components = known_crossingless_components;
-
-    while (true) {
-        if (apply_type_i_simplification(
-                result.code, result.crossingless_components, result.type_i_moves)) {
-            continue;
-        }
-        if (apply_type_ii_simplification(
-                result.code, result.crossingless_components, result.type_ii_moves)) {
-            continue;
-        }
-        break;
     }
 
     return result;

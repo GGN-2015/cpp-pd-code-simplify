@@ -146,14 +146,16 @@ auto result = pdcode_simplify::reduce_pd_code(code);
 std::cout << pdcode_simplify::format_pd_code(result.code) << "\n";
 ```
 
-The library also includes deterministic test helpers for Reidemeister I/II
-stress tests:
+The library also includes deterministic crossing-increasing helpers. Set
+`type_ii_percentage` to zero when you specifically want to test the default
+R1+nugatory preprocessing stage:
 
 ```cpp
 pdcode_simplify::RandomInflationOptions options;
 options.moves = 18;
 options.seed = 101;
+options.type_ii_percentage = 0;
 
 auto inflated = pdcode_simplify::randomly_increase_crossings(code, options);
-auto simplified = pdcode_simplify::simplify_reidemeister_i_ii(inflated.code);
+auto simplified = pdcode_simplify::simplify_pd_code(inflated.code);
 ```
