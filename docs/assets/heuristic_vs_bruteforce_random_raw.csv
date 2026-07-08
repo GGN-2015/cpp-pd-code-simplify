@@ -1,0 +1,21 @@
+case,family,mode,repeat,input_crossings,output_crossings,witness_delta,reduction_crossings,reduction_percent,time_seconds,return_code,simplification_found,tested_red_paths,tested_green_paths,path_search_mode
+zip_random_01,zip random sample,heuristic,1,142,95,4,51,35.91549295774648,0.1407546999398619,0,True,1,1,heuristic
+zip_random_01,zip random sample,bruteforce,1,142,95,2,49,34.50704225352113,0.14464010018855333,0,True,1,1,bruteforce
+zip_random_02,zip random sample,heuristic,1,144,115,4,33,22.916666666666668,0.11327320011332631,0,True,1,1,heuristic
+zip_random_02,zip random sample,bruteforce,1,144,115,2,31,21.52777777777778,0.09669189993292093,0,True,1,1,bruteforce
+zip_random_03,zip random sample,heuristic,1,120,80,4,44,36.666666666666664,0.06615349999628961,0,True,1,1,heuristic
+zip_random_03,zip random sample,bruteforce,1,120,80,2,42,35.0,0.0997440000064671,0,True,1,1,bruteforce
+zip_random_04,zip random sample,heuristic,1,135,108,2,29,21.48148148148148,0.10874250018969178,0,True,1,1,heuristic
+zip_random_04,zip random sample,bruteforce,1,135,108,2,29,21.48148148148148,0.10728330002166331,0,True,1,1,bruteforce
+zip_random_05,zip random sample,heuristic,1,123,85,4,42,34.146341463414636,0.2694071000441909,0,True,1,1,heuristic
+zip_random_05,zip random sample,bruteforce,1,123,85,4,42,34.146341463414636,0.2736490999814123,0,True,1,1,bruteforce
+zip_random_06,zip random sample,heuristic,1,141,110,12,43,30.49645390070922,0.1892740000039339,0,True,1,1,heuristic
+zip_random_06,zip random sample,bruteforce,1,141,110,12,43,30.49645390070922,1.6183055001311004,0,True,1,1,bruteforce
+zip_random_07,zip random sample,heuristic,1,147,99,8,56,38.095238095238095,0.18133469996973872,0,True,1,1,heuristic
+zip_random_07,zip random sample,bruteforce,1,147,99,8,56,38.095238095238095,0.42821520008146763,0,True,1,1,bruteforce
+zip_random_08,zip random sample,heuristic,1,132,94,2,40,30.303030303030305,0.21924930019304156,0,True,1,1,heuristic
+zip_random_08,zip random sample,bruteforce,1,132,94,2,40,30.303030303030305,0.2195163001306355,0,True,1,1,bruteforce
+zip_random_09,zip random sample,heuristic,1,150,100,4,54,36.0,0.2630962999537587,0,True,3,1,heuristic
+zip_random_09,zip random sample,bruteforce,1,150,100,4,54,36.0,0.2661466000135988,0,True,3,1,bruteforce
+zip_random_10,zip random sample,heuristic,1,139,89,2,52,37.410071942446045,0.19333459995687008,0,True,1,1,heuristic
+zip_random_10,zip random sample,bruteforce,1,139,89,2,52,37.410071942446045,0.1490654000081122,0,True,1,1,bruteforce

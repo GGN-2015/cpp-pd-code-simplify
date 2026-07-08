@@ -7,6 +7,7 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <queue>
 #include <random>
 #include <set>
 #include <sstream>
@@ -18,6 +19,11 @@ namespace pdcode_simplify {
 namespace {
 
 constexpr int kBlockedWeight = 10000;
+constexpr int kHeuristicBeamWidth = 8;
+constexpr int kHeuristicMinStateBudget = 128;
+constexpr int kHeuristicMaxStateBudget = 4096;
+constexpr int kHeuristicMinPathBudget = 24;
+constexpr int kHeuristicMaxPathBudget = 384;
 
 int positive_mod(int value, int modulus) {
     int result = value % modulus;
@@ -1076,6 +1082,203 @@ std::vector<std::vector<int>> collect_simple_paths(
     return paths;
 }
 
+std::vector<int> heuristic_distances_to_target(
+    const DualGraph& graph,
+    int target,
+    int cutoff) {
+    const int face_count = static_cast<int>(graph.faces.size());
+    const int infinity = std::numeric_limits<int>::max() / 4;
+    std::vector<int> distance(face_count, infinity);
+    std::deque<int> queue;
+    distance[target] = 0;
+    queue.push_back(target);
+
+    while (!queue.empty()) {
+        const int current = queue.front();
+        queue.pop_front();
+        for (int edge_index : graph.adjacency[current]) {
+            const GraphEdge& edge = graph.edges[edge_index];
+            if (edge.weight >= cutoff) {
+                continue;
+            }
+            const int next = edge.u == current ? edge.v : edge.u;
+            if (distance[next] != infinity) {
+                continue;
+            }
+            distance[next] = distance[current] + 1;
+            queue.push_back(next);
+        }
+    }
+    return distance;
+}
+
+struct HeuristicState {
+    std::vector<int> path;
+    std::vector<char> visited;
+    int weight = 0;
+    int branch_penalty = 0;
+    int estimated_weight = 0;
+    int estimated_length = 0;
+    int serial = 0;
+};
+
+struct HeuristicStateWorse {
+    bool operator()(const HeuristicState& lhs, const HeuristicState& rhs) const {
+        if (lhs.estimated_weight != rhs.estimated_weight) {
+            return lhs.estimated_weight > rhs.estimated_weight;
+        }
+        if (lhs.estimated_length != rhs.estimated_length) {
+            return lhs.estimated_length > rhs.estimated_length;
+        }
+        if (lhs.branch_penalty != rhs.branch_penalty) {
+            return lhs.branch_penalty > rhs.branch_penalty;
+        }
+        if (lhs.weight != rhs.weight) {
+            return lhs.weight > rhs.weight;
+        }
+        if (lhs.path.size() != rhs.path.size()) {
+            return lhs.path.size() > rhs.path.size();
+        }
+        return lhs.serial > rhs.serial;
+    }
+};
+
+struct HeuristicStep {
+    int next = -1;
+    int edge_index = -1;
+    int edge_weight = 0;
+    int distance = 0;
+    int degree_penalty = 0;
+};
+
+bool heuristic_step_less(const HeuristicStep& lhs, const HeuristicStep& rhs) {
+    if (lhs.edge_weight != rhs.edge_weight) {
+        return lhs.edge_weight < rhs.edge_weight;
+    }
+    if (lhs.distance != rhs.distance) {
+        return lhs.distance < rhs.distance;
+    }
+    if (lhs.degree_penalty != rhs.degree_penalty) {
+        return lhs.degree_penalty < rhs.degree_penalty;
+    }
+    if (lhs.next != rhs.next) {
+        return lhs.next < rhs.next;
+    }
+    return lhs.edge_index < rhs.edge_index;
+}
+
+std::vector<std::vector<int>> collect_heuristic_paths(
+    const DualGraph& graph,
+    int source,
+    int target,
+    int cutoff) {
+    std::vector<std::vector<int>> paths;
+    const int face_count = static_cast<int>(graph.faces.size());
+    if (source == target || source < 0 || target < 0 ||
+        source >= face_count || target >= face_count || cutoff <= 0) {
+        return paths;
+    }
+
+    const std::vector<int> distance = heuristic_distances_to_target(graph, target, cutoff);
+    const int infinity = std::numeric_limits<int>::max() / 4;
+    if (distance[source] == infinity || distance[source] >= cutoff) {
+        return paths;
+    }
+
+    const int state_budget = std::max(
+        kHeuristicMinStateBudget,
+        std::min(kHeuristicMaxStateBudget, face_count * std::max(1, cutoff) * 8));
+    const int path_budget = std::max(
+        kHeuristicMinPathBudget,
+        std::min(kHeuristicMaxPathBudget, face_count * 2 + cutoff * 8));
+
+    std::priority_queue<HeuristicState, std::vector<HeuristicState>, HeuristicStateWorse> queue;
+    int serial = 0;
+    HeuristicState initial;
+    initial.path.push_back(source);
+    initial.visited.assign(face_count, false);
+    initial.visited[source] = true;
+    initial.estimated_weight = distance[source];
+    initial.estimated_length = distance[source];
+    initial.serial = serial++;
+    queue.push(initial);
+
+    std::map<long long, int> popped_by_depth_face;
+    int popped_states = 0;
+    while (!queue.empty() && popped_states < state_budget &&
+           static_cast<int>(paths.size()) < path_budget) {
+        HeuristicState state = queue.top();
+        queue.pop();
+        ++popped_states;
+
+        const int current = state.path.back();
+        const int depth = static_cast<int>(state.path.size()) - 1;
+        if (current == target) {
+            if (state.weight < cutoff) {
+                paths.push_back(state.path);
+            }
+            continue;
+        }
+        if (depth >= cutoff - 1) {
+            continue;
+        }
+
+        const long long beam_key =
+            static_cast<long long>(depth) * static_cast<long long>(face_count) + current;
+        int& beam_count = popped_by_depth_face[beam_key];
+        if (beam_count >= kHeuristicBeamWidth) {
+            continue;
+        }
+        ++beam_count;
+
+        std::vector<HeuristicStep> steps;
+        for (int edge_index : graph.adjacency[current]) {
+            const GraphEdge& edge = graph.edges[edge_index];
+            const int next = edge.u == current ? edge.v : edge.u;
+            if (state.visited[next]) {
+                continue;
+            }
+            if (distance[next] == infinity) {
+                continue;
+            }
+            const int new_weight = state.weight + edge.weight;
+            if (new_weight >= cutoff) {
+                continue;
+            }
+            const int new_depth = depth + 1;
+            if (new_depth + distance[next] >= cutoff) {
+                continue;
+            }
+            HeuristicStep step;
+            step.next = next;
+            step.edge_index = edge_index;
+            step.edge_weight = edge.weight;
+            step.distance = distance[next];
+            step.degree_penalty = std::max(0, static_cast<int>(graph.adjacency[next].size()) - 2);
+            steps.push_back(step);
+        }
+        std::sort(steps.begin(), steps.end(), heuristic_step_less);
+
+        for (const HeuristicStep& step : steps) {
+            const GraphEdge& edge = graph.edges[step.edge_index];
+            HeuristicState next_state;
+            next_state.path = state.path;
+            next_state.path.push_back(step.next);
+            next_state.visited = state.visited;
+            next_state.visited[step.next] = true;
+            next_state.weight = state.weight + edge.weight;
+            next_state.branch_penalty = state.branch_penalty + step.degree_penalty;
+            next_state.estimated_weight = next_state.weight + distance[step.next];
+            next_state.estimated_length =
+                static_cast<int>(next_state.path.size()) - 1 + distance[step.next];
+            next_state.serial = serial++;
+            queue.push(std::move(next_state));
+        }
+    }
+
+    return paths;
+}
+
 bool contains_endpoint_key(const std::vector<int>& endpoints, int key) {
     return std::find(endpoints.begin(), endpoints.end(), key) != endpoints.end();
 }
@@ -1627,6 +1830,13 @@ SimplificationResult find_simplification(
     const PDCode& code,
     const SimplifierOptions& options) {
     SimplificationResult result;
+    if (options.max_paths == -1 && !options.ban_heuristic) {
+        result.path_search_mode = "heuristic";
+    } else if (options.max_paths == -1) {
+        result.path_search_mode = "bruteforce";
+    } else {
+        result.path_search_mode = "bounded";
+    }
     Diagram diagram(code);
     DualGraph graph(diagram);
     const auto red_lines = possible_red_lines(diagram);
@@ -1657,7 +1867,12 @@ SimplificationResult find_simplification(
         const int cutoff = static_cast<int>(red_path.size()) - 1;
         for (int source : sources) {
             for (int destination : destinations) {
-                auto found_paths = collect_simple_paths(graph, source, destination, cutoff, options.max_paths);
+                std::vector<std::vector<int>> found_paths;
+                if (options.max_paths == -1 && !options.ban_heuristic) {
+                    found_paths = collect_heuristic_paths(graph, source, destination, cutoff);
+                } else {
+                    found_paths = collect_simple_paths(graph, source, destination, cutoff, options.max_paths);
+                }
                 paths.insert(paths.end(), found_paths.begin(), found_paths.end());
                 if (options.max_paths != -1 && static_cast<int>(paths.size()) > options.max_paths) {
                     break;

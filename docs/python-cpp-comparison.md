@@ -16,13 +16,23 @@ implementations use the default preprocessing pipeline first: R1-move removal,
 then nugatory-crossing removal.
 
 ```sh
-.\.venv\Scripts\python tools\compare_cpp_python.py --include-reference
+.\.venv\Scripts\python tools\compare_cpp_python.py ^
+  --include-reference ^
+  --include-benchmark ^
+  --suite original ^
+  --include-interface ^
+  --max-paths -1 ^
+  --ban-heuristic
 ```
 
-To compare every deterministic benchmark input as well:
+To compare the ten zip-random large cases with heuristic green-path sampling:
 
 ```sh
-.\.venv\Scripts\python tools\compare_cpp_python.py --include-benchmark
+.\.venv\Scripts\python tools\compare_cpp_python.py ^
+  --include-benchmark ^
+  --suite random ^
+  --include-interface ^
+  --max-paths -1
 ```
 
 On Linux and macOS, use `.venv/bin/python` instead of
@@ -30,6 +40,8 @@ On Linux and macOS, use `.venv/bin/python` instead of
 
 Return code `0` from either simplifier means a simplification witness was
 found. Return code `1` means the run completed normally but found no witness.
+Batch mode keeps going after item-level errors and reports them in JSON so a
+bad PD code does not prevent later inputs from being checked.
 
 ## Benchmarking
 

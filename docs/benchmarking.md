@@ -57,6 +57,8 @@ python tools/package.py build
 .\.venv\Scripts\python tools\benchmark_cpp_python.py ^
   --suite original ^
   --repeat 3 ^
+  --max-paths -1 ^
+  --ban-heuristic ^
   --interface-cxx C:\path\to\g++.exe ^
   --plot docs\assets\benchmark_original_cpp_python.png ^
   --summary-csv docs\assets\benchmark_original_summary.csv ^
@@ -70,6 +72,7 @@ Run the zip-random large-case suite separately:
 .\.venv\Scripts\python tools\benchmark_cpp_python.py ^
   --suite random ^
   --repeat 3 ^
+  --max-paths -1 ^
   --interface-cxx C:\path\to\g++.exe ^
   --plot docs\assets\benchmark_random_cpp_python.png ^
   --summary-csv docs\assets\benchmark_random_summary.csv ^
@@ -85,6 +88,11 @@ The Python C++ interface compiles and caches a dynamic library through
 chart reports normal cached `ctypes` calls rather than first-use compilation
 time.
 
+The original lightweight suite is run with `--max-paths -1 --ban-heuristic`,
+which means complete green-path enumeration after preprocessing. The large
+zip-random suite is run with `--max-paths -1`, which means deterministic
+heuristic green-path sampling.
+
 Each measurement repeat writes the selected cases to one temporary multi-line
 PD-code file, then starts each engine once to process the whole file. The chart
 reports average time per PD code and peak RSS for the whole batch.
@@ -94,11 +102,31 @@ mid-simplification search: R1-move removal followed by nugatory-crossing
 removal. The Python prototype implements this preprocessing in Python, while
 the Python C++ interface reuses the C++ dynamic library.
 
+The C++ heuristic-vs-brute-force comparison is separate from the three-engine
+benchmark and runs only on the ten zip-random large cases:
+
+```sh
+.\.venv\Scripts\python tools\benchmark_cpp_heuristic.py ^
+  --repeat 1 ^
+  --plot docs\assets\heuristic_vs_bruteforce_random.png ^
+  --summary-csv docs\assets\heuristic_vs_bruteforce_random_summary.csv ^
+  --raw-csv docs\assets\heuristic_vs_bruteforce_random_raw.csv ^
+  --json docs\assets\heuristic_vs_bruteforce_random_results.json
+```
+
+The reduction metric for that chart is the observed preprocessing reduction
+plus the first witness's red-green path length difference, divided by the
+original crossing count. The CLI currently reports a witness instead of
+rewriting the diagram by that witness, so this is a one-step reduction
+potential metric.
+
 ## Local Results
 
 The committed charts were generated on the local Windows development machine
-with a MinGW `g++ -O3 -DNDEBUG` C++ executable, `max_paths=100`, and three
-repeats per suite and engine.
+with a MinGW `g++ -O3 -DNDEBUG` C++ executable. The original lightweight suite
+uses `max_paths=-1` with heuristic disabled; the zip-random suite uses
+`max_paths=-1` with heuristic enabled. Each three-engine suite uses three
+repeats.
 
 Original lightweight suite:
 
@@ -106,9 +134,9 @@ Original lightweight suite:
 
 | Engine | Average Time Per PD Code (s) | Average Peak RSS (MiB) |
 | --- | ---: | ---: |
-| C++ CLI | 0.182968 | 5.910 |
-| Python C++ interface | 0.150219 | 30.138 |
-| Python | 4.106636 | 23.831 |
+| C++ CLI | 0.494679 | 6.383 |
+| Python C++ interface | 0.338129 | 30.682 |
+| Python | 7.990471 | 26.214 |
 
 Zip-random large-case suite:
 
@@ -116,11 +144,23 @@ Zip-random large-case suite:
 
 | Engine | Average Time Per PD Code (s) | Average Peak RSS (MiB) |
 | --- | ---: | ---: |
-| C++ CLI | 0.206798 | 6.077 |
-| Python C++ interface | 0.209011 | 30.418 |
-| Python | 0.396606 | 24.542 |
+| C++ CLI | 0.169238 | 6.465 |
+| Python C++ interface | 0.141012 | 30.659 |
+| Python | 0.296344 | 26.352 |
 
 Summary CSV files are stored in
 [`docs/assets/benchmark_original_summary.csv`](assets/benchmark_original_summary.csv)
 and [`docs/assets/benchmark_random_summary.csv`](assets/benchmark_random_summary.csv).
 Raw measurements are stored in the matching `*_raw.csv` files.
+
+C++ heuristic-vs-brute-force comparison on the zip-random large-case suite:
+
+![C++ heuristic versus brute-force green-path search](assets/heuristic_vs_bruteforce_random.png)
+
+| Mode | Average Time Per PD Code (s) | Reduction / Original Crossings (%) |
+| --- | ---: | ---: |
+| Heuristic | 0.174462 | 32.338 |
+| Brute force | 0.340326 | 31.901 |
+
+The summary CSV is stored in
+[`docs/assets/heuristic_vs_bruteforce_random_summary.csv`](assets/heuristic_vs_bruteforce_random_summary.csv).

@@ -8,6 +8,7 @@ PD-code input style as the project executable and `cppkh`.
 from __future__ import annotations
 
 import argparse
+import heapq
 import json
 import os
 import re
@@ -20,6 +21,11 @@ from typing import Deque, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 PDCode = List[Tuple[int, int, int, int]]
 BLOCKED_WEIGHT = 10_000
+HEURISTIC_BEAM_WIDTH = 8
+HEURISTIC_MIN_STATE_BUDGET = 128
+HEURISTIC_MAX_STATE_BUDGET = 4096
+HEURISTIC_MIN_PATH_BUDGET = 24
+HEURISTIC_MAX_PATH_BUDGET = 384
 
 
 @dataclass(frozen=True, order=True)
@@ -80,6 +86,7 @@ class ComponentAnalysis:
 class SimplificationResult:
     found: bool = False
     direction: str = "left"
+    path_search_mode: str = ""
     red_path: List[Endpoint] = field(default_factory=list)
     green_path: List[int] = field(default_factory=list)
     green_crossings: List[GreenCrossing] = field(default_factory=list)
@@ -107,6 +114,7 @@ class SimplificationResult:
             data["search_components"] = search_components.to_json()
         data["tested_red_paths"] = self.tested_red_paths
         data["tested_green_paths"] = self.tested_green_paths
+        data["path_search_mode"] = self.path_search_mode
         if self.found:
             data["direction"] = self.direction
             data["red_path"] = [
@@ -847,6 +855,157 @@ def collect_simple_paths(
     return paths
 
 
+def heuristic_distances_to_target(graph: DualGraph, target: int, cutoff: int) -> List[int]:
+    infinity = 10**9
+    distance = [infinity for _ in graph.faces]
+    queue: Deque[int] = deque([target])
+    distance[target] = 0
+    while queue:
+        current = queue.popleft()
+        for edge_index in graph.adjacency[current]:
+            edge = graph.edges[edge_index]
+            if edge.weight >= cutoff:
+                continue
+            nxt = edge.v if edge.u == current else edge.u
+            if distance[nxt] != infinity:
+                continue
+            distance[nxt] = distance[current] + 1
+            queue.append(nxt)
+    return distance
+
+
+def collect_heuristic_paths(
+    graph: DualGraph,
+    source: int,
+    target: int,
+    cutoff: int,
+) -> List[List[int]]:
+    face_count = len(graph.faces)
+    if (
+        source == target
+        or source < 0
+        or target < 0
+        or source >= face_count
+        or target >= face_count
+        or cutoff <= 0
+    ):
+        return []
+
+    infinity = 10**9
+    distance = heuristic_distances_to_target(graph, target, cutoff)
+    if distance[source] == infinity or distance[source] >= cutoff:
+        return []
+
+    state_budget = max(
+        HEURISTIC_MIN_STATE_BUDGET,
+        min(HEURISTIC_MAX_STATE_BUDGET, face_count * max(1, cutoff) * 8),
+    )
+    path_budget = max(
+        HEURISTIC_MIN_PATH_BUDGET,
+        min(HEURISTIC_MAX_PATH_BUDGET, face_count * 2 + cutoff * 8),
+    )
+
+    paths: List[List[int]] = []
+    serial = 0
+    # heap item:
+    # (estimated_weight, estimated_length, branch_penalty, weight, path_length, serial, path, visited, weight, branch_penalty)
+    heap: List[Tuple[int, int, int, int, int, int, List[int], Tuple[bool, ...], int, int]] = []
+    initial_visited = [False for _ in graph.faces]
+    initial_visited[source] = True
+    heapq.heappush(
+        heap,
+        (
+            distance[source],
+            distance[source],
+            0,
+            0,
+            1,
+            serial,
+            [source],
+            tuple(initial_visited),
+            0,
+            0,
+        ),
+    )
+    serial += 1
+
+    popped_by_depth_face: Dict[Tuple[int, int], int] = {}
+    popped_states = 0
+    while heap and popped_states < state_budget and len(paths) < path_budget:
+        (
+            _estimated_weight,
+            _estimated_length,
+            _branch_key,
+            _weight_key,
+            _path_length_key,
+            _serial_key,
+            path,
+            visited_tuple,
+            weight,
+            branch_penalty,
+        ) = heapq.heappop(heap)
+        popped_states += 1
+
+        current = path[-1]
+        depth = len(path) - 1
+        if current == target:
+            if weight < cutoff:
+                paths.append(path)
+            continue
+        if depth >= cutoff - 1:
+            continue
+
+        beam_key = (depth, current)
+        beam_count = popped_by_depth_face.get(beam_key, 0)
+        if beam_count >= HEURISTIC_BEAM_WIDTH:
+            continue
+        popped_by_depth_face[beam_key] = beam_count + 1
+
+        visited = list(visited_tuple)
+        steps = []
+        for edge_index in graph.adjacency[current]:
+            edge = graph.edges[edge_index]
+            nxt = edge.v if edge.u == current else edge.u
+            if visited[nxt] or distance[nxt] == infinity:
+                continue
+            new_weight = weight + edge.weight
+            if new_weight >= cutoff:
+                continue
+            new_depth = depth + 1
+            if new_depth + distance[nxt] >= cutoff:
+                continue
+            degree_penalty = max(0, len(graph.adjacency[nxt]) - 2)
+            steps.append((edge.weight, distance[nxt], degree_penalty, nxt, edge_index))
+        steps.sort()
+
+        for _edge_weight, _distance, degree_penalty, nxt, _edge_index in steps:
+            next_path = path + [nxt]
+            next_visited = list(visited)
+            next_visited[nxt] = True
+            next_weight = weight + _edge_weight
+            next_branch_penalty = branch_penalty + degree_penalty
+            estimated_weight = next_weight + distance[nxt]
+            estimated_length = len(next_path) - 1 + distance[nxt]
+            heapq.heappush(
+                heap,
+                (
+                    estimated_weight,
+                    estimated_length,
+                    next_branch_penalty,
+                    next_weight,
+                    len(next_path),
+                    serial,
+                    next_path,
+                    tuple(next_visited),
+                    next_weight,
+                    next_branch_penalty,
+                ),
+            )
+            serial += 1
+
+    return paths
+
+
 def opposite_level(level: str) -> str:
     return "over" if level == "under" else "under"
 
@@ -977,8 +1136,18 @@ def do_check(
     return True
 
 
-def find_simplification(code: PDCode, max_paths: int = 100) -> SimplificationResult:
+def find_simplification(
+    code: PDCode,
+    max_paths: int = -1,
+    ban_heuristic: bool = False,
+) -> SimplificationResult:
     result = SimplificationResult()
+    if max_paths == -1 and not ban_heuristic:
+        result.path_search_mode = "heuristic"
+    elif max_paths == -1:
+        result.path_search_mode = "bruteforce"
+    else:
+        result.path_search_mode = "bounded"
     diagram = Diagram(code)
     graph = DualGraph(diagram)
     red_lines = possible_red_lines(diagram)
@@ -1008,7 +1177,10 @@ def find_simplification(code: PDCode, max_paths: int = 100) -> SimplificationRes
         cutoff = len(red_path) - 1
         for source in sources:
             for destination in destinations:
-                found = collect_simple_paths(graph, source, destination, cutoff, max_paths)
+                if max_paths == -1 and not ban_heuristic:
+                    found = collect_heuristic_paths(graph, source, destination, cutoff)
+                else:
+                    found = collect_simple_paths(graph, source, destination, cutoff, max_paths)
                 paths.extend(found)
                 if max_paths != -1 and len(paths) > max_paths:
                     break
@@ -1121,10 +1293,10 @@ def list_input_files(directory: str) -> List[str]:
 
 def run_job(
     job: PDJob,
-    max_paths: int = 100,
+    max_paths: int = -1,
+    ban_heuristic: bool = False,
     known_crossingless_components: int = 0,
     removed_crossings: Optional[Sequence[int]] = None,
-    simplify_pd: bool = True,
 ) -> Tuple[
     SimplificationResult,
     ComponentAnalysis,
@@ -1141,18 +1313,14 @@ def run_job(
         after_removal = analyze_components_after_removing_crossings(
             job.code, removed_crossings, crossingless
         )
-    pd_simplification = None
-    search_components = None
-    search_code = job.code
-    if simplify_pd:
-        pd_simplification = simplify_pd_code(job.code, crossingless)
-        search_code = pd_simplification.code
-        search_components = analyze_components(
-            search_code,
-            pd_simplification.crossingless_components,
-        )
+    pd_simplification = simplify_pd_code(job.code, crossingless)
+    search_code = pd_simplification.code
+    search_components = analyze_components(
+        search_code,
+        pd_simplification.crossingless_components,
+    )
     return (
-        find_simplification(search_code, max_paths),
+        find_simplification(search_code, max_paths, ban_heuristic),
         input_components,
         after_removal,
         pd_simplification,
@@ -1200,6 +1368,7 @@ def print_text_result(
         print(f"search_total_components: {search_components.total_components}")
     print(f"tested_red_paths: {result.tested_red_paths}")
     print(f"tested_green_paths: {result.tested_green_paths}")
+    print(f"path_search_mode: {result.path_search_mode}")
     if not result.found:
         return
     red = ", ".join(f"({e.crossing}, {e.strand})" for e in result.red_path)
@@ -1223,11 +1392,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pd-dir", "-d", action="append", help="read every .txt/.pd file in a directory")
     parser.add_argument("--input", "-i", action="append", help="alias for --pd-file")
     parser.add_argument("--json", action="store_true", help="print JSON output")
-    parser.add_argument("--simplify-pd", dest="simplify_pd", action="store_true", default=True,
-                        help="enable R1 then nugatory PD pre-simplification")
-    parser.add_argument("--no-simplify-pd", "--raw-pd", dest="simplify_pd", action="store_false",
-                        help="disable PD pre-simplification")
-    parser.add_argument("--max-paths", type=int, default=100, help="green path cap, or -1 for unlimited")
+    parser.add_argument("--max-paths", type=int, default=-1, help="green path cap, or -1 for heuristic sampling")
+    parser.add_argument("--ban-heuristic", action="store_true",
+                        help="with --max-paths -1, enumerate all green paths instead of heuristic sampling")
     parser.add_argument(
         "--known-crossingless-components",
         type=int,
@@ -1301,9 +1468,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 ) = run_job(
                     job,
                     max_paths=args.max_paths,
+                    ban_heuristic=args.ban_heuristic,
                     known_crossingless_components=args.known_crossingless_components,
                     removed_crossings=removed_crossings,
-                    simplify_pd=args.simplify_pd,
                 )
                 all_found = all_found and result.found
                 payload.append(
@@ -1337,9 +1504,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 ) = run_job(
                     job,
                     max_paths=args.max_paths,
+                    ban_heuristic=args.ban_heuristic,
                     known_crossingless_components=args.known_crossingless_components,
                     removed_crossings=removed_crossings,
-                    simplify_pd=args.simplify_pd,
                 )
                 all_found = all_found and result.found
                 print_text_result(

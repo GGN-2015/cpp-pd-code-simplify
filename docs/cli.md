@@ -86,14 +86,18 @@ component.
 --pd-file FILE, -f FILE        Read one input file.
 --pd-dir DIR, -d DIR           Read every .txt and .pd file in a directory.
 --json                         Print JSON output.
---simplify-pd                  Enable R1 then nugatory PD simplification.
---no-simplify-pd, --raw-pd     Disable PD simplification.
---max-paths N                  Cap accepted green paths; use -1 for unlimited.
+--max-paths N                  Cap accepted green paths; default -1.
+--ban-heuristic                With --max-paths -1, enumerate all green paths.
 --known-crossingless-components N
                                Add N components not representable in PD code.
 --remove-crossings LIST        Report component counts after removing crossings.
 --help, -h                     Show help.
 ```
+
+`--max-paths -1` is the default. In that mode the executable uses deterministic
+heuristic green-path sampling. Add `--ban-heuristic` to run exhaustive
+green-path enumeration instead. If `--max-paths` is any other integer, the
+legacy bounded path collector is used.
 
 ## Component Accounting
 

@@ -72,6 +72,10 @@ Zip-random large-case benchmark:
 
 ![Zip-random benchmark bar chart comparing C++ CLI, Python C++ interface, and Python](docs/assets/benchmark_random_cpp_python.png)
 
+C++ heuristic versus brute-force search on the zip-random large cases:
+
+![C++ heuristic versus brute-force green-path search](docs/assets/heuristic_vs_bruteforce_random.png)
+
 This local run uses the deterministic benchmark set documented in
 [Benchmarking](docs/benchmarking.md).
 
@@ -81,6 +85,7 @@ This local run uses the deterministic benchmark set documented in
 - [Python prototype and comparison tools](docs/python.md)
 - [Python C++ interface package](docs/python-interface.md)
 - [Algorithm and correctness](docs/algorithm-and-correctness.md)
+- [Heuristic path sampling](docs/heuristic-path-sampling.md)
 - [Packaging](docs/packaging.md)
 - [Benchmarking](docs/benchmarking.md)
 - [Python and C++ comparison results](docs/python-cpp-comparison.md)

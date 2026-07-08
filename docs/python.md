@@ -26,12 +26,6 @@ Run one PD code:
 python mid_simplify_v5.py --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 ```
 
-Disable preprocessing only for raw-algorithm debugging:
-
-```sh
-python mid_simplify_v5.py --no-simplify-pd --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
-```
-
 Report crossingless components after removing all trefoil crossings:
 
 ```sh
@@ -45,9 +39,13 @@ import mid_simplify_v5 as simplify
 
 code = simplify.parse_pd_code("PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]")
 prepared = simplify.simplify_pd_code(code)
-result = simplify.find_simplification(prepared.code, max_paths=100)
+result = simplify.find_simplification(prepared.code)
 print(result.found)
 ```
+
+`find_simplification` defaults to `max_paths=-1`, which uses deterministic
+heuristic green-path sampling. Pass `ban_heuristic=True` with `max_paths=-1`
+to enumerate all green paths for a manageable input.
 
 Component accounting is available directly:
 

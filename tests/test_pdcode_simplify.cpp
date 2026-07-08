@@ -54,7 +54,6 @@ void test_common_knot_components() {
     require(figure_eight_components.total_components() == 1, "figure-eight knot should have one component");
 
     pdcode_simplify::SimplifierOptions options;
-    options.max_paths = 100;
     (void)pdcode_simplify::find_simplification(trefoil, options);
     (void)pdcode_simplify::find_simplification(figure_eight, options);
 }
@@ -208,7 +207,6 @@ void test_reference_sample() {
 )PD";
     const auto code = pdcode_simplify::parse_pd_code(sample);
     pdcode_simplify::SimplifierOptions options;
-    options.max_paths = 100;
     const auto result = pdcode_simplify::find_simplification(code, options);
     require(result.found, "reference PD code should have a simplification witness");
     require(!result.red_path.empty(), "witness should include a red path");

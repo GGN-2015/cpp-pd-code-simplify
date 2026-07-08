@@ -87,6 +87,72 @@ def normalize_pd_codes(pd_codes: PdManyInput) -> list[str]:
     return [normalize_pd_code(pd_code) for pd_code in pd_codes]
 
 
+def _label_for_block(text: str, block_start: int, label_prefix: str, index: int) -> str:
+    line_start = text.rfind("\n", 0, block_start)
+    line_start = 0 if line_start == -1 else line_start + 1
+    before_block = text[line_start:block_start]
+    if ":" in before_block:
+        line_label = before_block.split(":", 1)[0].strip()
+        if line_label:
+            return f"{label_prefix}:{line_label}"
+    if index == 0:
+        return label_prefix
+    return f"{label_prefix}#{index + 1}"
+
+
+def _pd_file_jobs(path: str) -> list[tuple[str, str]]:
+    text = pathlib.Path(path).read_text(encoding="utf-8")
+    jobs: list[tuple[str, str]] = []
+    position = 0
+    index = 0
+
+    while True:
+        start = text.find("PD[", position)
+        if start == -1:
+            break
+        depth = 0
+        end = -1
+        for cursor in range(start + 2, len(text)):
+            if text[cursor] == "[":
+                depth += 1
+            elif text[cursor] == "]":
+                depth -= 1
+                if depth == 0:
+                    end = cursor
+                    break
+        if end == -1:
+            jobs.append((f"{path}#{index + 1}", text[start:].strip()))
+            break
+        jobs.append((
+            _label_for_block(text, start, path, index),
+            text[start : end + 1],
+        ))
+        index += 1
+        position = end + 1
+
+    if jobs:
+        if len(jobs) == 1:
+            jobs[0] = (path, jobs[0][1])
+        return jobs
+
+    for line in text.splitlines():
+        cleaned = line.strip()
+        if not cleaned or cleaned.startswith("#"):
+            continue
+        label = path
+        payload = cleaned
+        if ":" in cleaned:
+            line_label, payload = cleaned.split(":", 1)
+            line_label = line_label.strip()
+            payload = payload.strip()
+            if line_label:
+                label = f"{path}:{line_label}"
+        elif jobs:
+            label = f"{path}#{len(jobs) + 1}"
+        jobs.append((label, payload))
+    return jobs
+
+
 @contextlib.contextmanager
 def _resource_paths():
     package = "cpp_pd_code_simplify_interface"
@@ -335,6 +401,7 @@ def _load_library() -> ctypes.CDLL:
     library.pdcode_simplify_run_json.argtypes = [
         ctypes.c_char_p,
         ctypes.c_int,
+        ctypes.c_int,
         ctypes.c_ulonglong,
         ctypes.POINTER(ctypes.c_int),
         ctypes.c_ulonglong,
@@ -350,7 +417,8 @@ def _load_library() -> ctypes.CDLL:
 def _run_one(
     pd_text: str,
     *,
-    max_paths: int = 100,
+    max_paths: int = -1,
+    ban_heuristic: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
 ) -> dict[str, Any]:
@@ -363,6 +431,7 @@ def _run_one(
     pointer = library.pdcode_simplify_run_json(
         pd_text.encode("utf-8"),
         int(max_paths),
+        1 if ban_heuristic else 0,
         int(known_crossingless_components),
         removed_array,
         int(removed_count),
@@ -386,7 +455,8 @@ def _run_one(
 def simplify(
     pd_code: PdInput,
     *,
-    max_paths: int = 100,
+    max_paths: int = -1,
+    ban_heuristic: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
 ) -> dict[str, Any]:
@@ -395,6 +465,7 @@ def simplify(
     return _run_one(
         normalize_pd_code(pd_code),
         max_paths=max_paths,
+        ban_heuristic=ban_heuristic,
         known_crossingless_components=known_crossingless_components,
         remove_crossings=remove_crossings,
     )
@@ -403,7 +474,8 @@ def simplify(
 def simplify_many(
     pd_codes: PdManyInput,
     *,
-    max_paths: int = 100,
+    max_paths: int = -1,
+    ban_heuristic: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
 ) -> list[dict[str, Any]]:
@@ -413,6 +485,7 @@ def simplify_many(
         _run_one(
             pd_text,
             max_paths=max_paths,
+            ban_heuristic=ban_heuristic,
             known_crossingless_components=known_crossingless_components,
             remove_crossings=remove_crossings,
         )
@@ -424,7 +497,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run cpp-pd-code-simplify through the Python interface.")
     parser.add_argument("pd_code", nargs="?", help="PD code as PD[...] text or a Python-style list of crossings.")
     parser.add_argument("--pd-file", "-f", help="read one file containing one or more labelled PD-code lines")
-    parser.add_argument("--max-paths", type=int, default=100)
+    parser.add_argument("--max-paths", type=int, default=-1)
+    parser.add_argument("--ban-heuristic", action="store_true")
     parser.add_argument("--known-crossingless-components", type=int, default=0)
     parser.add_argument("--remove-crossings", help="comma-separated zero-based crossing indices")
     args = parser.parse_args(argv)
@@ -438,32 +512,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     exit_code = 0
     if args.pd_file:
-        lines = []
-        for line in pathlib.Path(args.pd_file).read_text(encoding="utf-8").splitlines():
-            cleaned = line.strip()
-            if not cleaned or cleaned.startswith("#"):
-                continue
-            payload = cleaned.split(":", 1)[1].strip() if ":" in cleaned else cleaned
-            lines.append(payload)
+        jobs = _pd_file_jobs(args.pd_file)
         batch_payload = []
-        for line in lines:
+        show_labels = len(jobs) > 1
+        for label, line in jobs:
             try:
-                batch_payload.append(
-                    simplify(
-                        line,
-                        max_paths=args.max_paths,
-                        known_crossingless_components=args.known_crossingless_components,
-                        remove_crossings=remove_crossings,
-                    )
+                item = simplify(
+                    line,
+                    max_paths=args.max_paths,
+                    ban_heuristic=args.ban_heuristic,
+                    known_crossingless_components=args.known_crossingless_components,
+                    remove_crossings=remove_crossings,
                 )
+                if show_labels:
+                    item = {"label": label, **item}
+                batch_payload.append(item)
             except Exception as exc:
                 exit_code = 2
-                batch_payload.append({"error": str(exc)})
+                item = {"error": str(exc)}
+                if show_labels:
+                    item = {"label": label, **item}
+                batch_payload.append(item)
         payload: Any = batch_payload
     else:
         payload = simplify(
             args.pd_code or "",
             max_paths=args.max_paths,
+            ban_heuristic=args.ban_heuristic,
             known_crossingless_components=args.known_crossingless_components,
             remove_crossings=remove_crossings,
         )

@@ -44,7 +44,8 @@ void print_help(const char* program) {
         << "Use --remove-crossings LIST to report component counts after a\n"
         << "zero-based crossing-removal simulation.\n"
         << "R1-move removal followed by nugatory-crossing removal is enabled by default.\n"
-        << "Use --no-simplify-pd or --raw-pd to compare against the raw Python prototype.\n"
+        << "With --max-paths -1, heuristic green-path sampling is enabled by default.\n"
+        << "Use --ban-heuristic to force brute-force green-path enumeration.\n"
         << "If no input is given, the CLI tries to read PD.txt from the current directory.\n";
 }
 
@@ -348,6 +349,7 @@ void print_text_result(
     }
     std::cout << "tested_red_paths: " << result.tested_red_paths << '\n';
     std::cout << "tested_green_paths: " << result.tested_green_paths << '\n';
+    std::cout << "path_search_mode: " << result.path_search_mode << '\n';
     if (!result.found) {
         return;
     }
@@ -441,7 +443,8 @@ void print_json_result(
         std::cout << "},\n";
     }
     std::cout << "  \"tested_red_paths\": " << result.tested_red_paths << ",\n";
-    std::cout << "  \"tested_green_paths\": " << result.tested_green_paths;
+    std::cout << "  \"tested_green_paths\": " << result.tested_green_paths << ",\n";
+    std::cout << "  \"path_search_mode\": \"" << json_escape(result.path_search_mode) << "\"";
     if (!result.found) {
         std::cout << "\n}\n";
         return;
@@ -494,7 +497,6 @@ int main(int argc, char** argv) {
     try {
         pdcode_simplify::SimplifierOptions options;
         bool json = false;
-        bool simplify_pd = true;
         std::size_t known_crossingless_components = 0;
         std::vector<int> removed_crossings;
         bool has_removal_simulation = false;
@@ -510,10 +512,8 @@ int main(int argc, char** argv) {
             }
             if (arg == "--json") {
                 json = true;
-            } else if (arg == "--simplify-pd") {
-                simplify_pd = true;
-            } else if (arg == "--no-simplify-pd" || arg == "--raw-pd") {
-                simplify_pd = false;
+            } else if (arg == "--ban-heuristic") {
+                options.ban_heuristic = true;
             } else if (arg == "--max-paths") {
                 if (i + 1 >= argc) {
                     throw std::invalid_argument("--max-paths requires a value");
@@ -612,16 +612,11 @@ int main(int argc, char** argv) {
                         jobs[i].code, removed_crossings, job_crossingless_components);
                 }
 
-                pdcode_simplify::PDCode search_code = jobs[i].code;
-                pdcode_simplify::PDSimplificationResult pd_simplification;
-                pdcode_simplify::ComponentAnalysis search_components;
-                if (simplify_pd) {
-                    pd_simplification = pdcode_simplify::simplify_pd_code(
-                        jobs[i].code, job_crossingless_components);
-                    search_code = pd_simplification.code;
-                    search_components = pdcode_simplify::analyze_components(
-                        search_code, pd_simplification.crossingless_components);
-                }
+                pdcode_simplify::PDSimplificationResult pd_simplification =
+                    pdcode_simplify::simplify_pd_code(jobs[i].code, job_crossingless_components);
+                pdcode_simplify::PDCode search_code = pd_simplification.code;
+                pdcode_simplify::ComponentAnalysis search_components = pdcode_simplify::analyze_components(
+                    search_code, pd_simplification.crossingless_components);
 
                 const auto result = pdcode_simplify::find_simplification(search_code, options);
                 all_found = all_found && result.found;
@@ -631,8 +626,8 @@ int main(int argc, char** argv) {
                         result,
                         input_components,
                         has_removal_simulation ? &after_removal_components : nullptr,
-                        simplify_pd ? &pd_simplification : nullptr,
-                        simplify_pd ? &search_components : nullptr,
+                        &pd_simplification,
+                        &search_components,
                         show_labels ? &jobs[i].label : nullptr);
                 } else {
                     if (show_labels) {
@@ -642,8 +637,8 @@ int main(int argc, char** argv) {
                         result,
                         input_components,
                         has_removal_simulation ? &after_removal_components : nullptr,
-                        simplify_pd ? &pd_simplification : nullptr,
-                        simplify_pd ? &search_components : nullptr);
+                        &pd_simplification,
+                        &search_components);
                 }
             } catch (const std::exception& error) {
                 had_error = true;

@@ -149,6 +149,10 @@ def commands_for_batch(cpp_exe: str, pd_file: Path, max_paths: int) -> Mapping[s
     }
 
 
+def add_ban_heuristic(command: List[str]) -> List[str]:
+    return command + ["--ban-heuristic"]
+
+
 SUITES: Mapping[str, Sequence[BenchmarkCase]] = {
     "all": BENCHMARK_CASES,
     "original": ORIGINAL_BENCHMARK_CASES,
@@ -170,13 +174,16 @@ def run_benchmark(
     repeat: int,
     sample_interval: float,
     interface_cxx: Optional[str] = None,
+    ban_heuristic: bool = False,
 ) -> List[RawRow]:
     rows: List[RawRow] = []
     total_crossings = sum(case.crossings for case in cases)
     warm_interface_cache(sample_interval, interface_cxx)
     pd_file = write_batch_file(cases)
     try:
-        commands = commands_for_batch(cpp_exe, pd_file, max_paths)
+        commands = dict(commands_for_batch(cpp_exe, pd_file, max_paths))
+        if ban_heuristic:
+            commands = {engine: add_ban_heuristic(command) for engine, command in commands.items()}
         for repeat_index in range(1, repeat + 1):
             for engine in ("cpp", "interface", "python"):
                 env = interface_env(interface_cxx) if engine == "interface" else None
@@ -269,6 +276,7 @@ def plot_aggregate(
     repeat: int,
     max_paths: int,
     suite: str,
+    ban_heuristic: bool,
 ) -> None:
     import matplotlib
 
@@ -327,7 +335,8 @@ def plot_aggregate(
         0.02,
         (
             f"Single-process batches over {case_count} deterministic cases, {repeat} repeat(s), "
-            f"max_paths={max_paths}. C++ is {time_speedup:.1f}x faster; "
+            f"max_paths={max_paths}, heuristic={'off' if ban_heuristic else 'on'}. "
+            f"C++ is {time_speedup:.1f}x faster; "
             f"interface is {interface_overhead:.1f}x C++ time; Python uses {rss_ratio:.1f}x peak RSS."
         ),
         ha="center",
@@ -365,7 +374,8 @@ def print_summary(summary: Sequence[SummaryRow], aggregate: Mapping[str, Mapping
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cpp-exe", default=None, help="path to pd_simplify executable")
-    parser.add_argument("--max-paths", type=int, default=100)
+    parser.add_argument("--max-paths", type=int, default=-1)
+    parser.add_argument("--ban-heuristic", action="store_true")
     parser.add_argument("--repeat", type=int, default=3, help="measurement repeats per case and engine")
     parser.add_argument(
         "--suite",
@@ -396,6 +406,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args.repeat,
         args.sample_interval,
         interface_cxx=args.interface_cxx,
+        ban_heuristic=args.ban_heuristic,
     )
     summary = summarize_rows(rows)
     aggregate = aggregate_by_engine(summary)
@@ -442,13 +453,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "max_paths": args.max_paths,
                 "repeat": args.repeat,
                 "suite": args.suite,
+                "ban_heuristic": args.ban_heuristic,
                 "raw": rows,
                 "summary": summary,
                 "aggregate": aggregate,
             },
         )
     if args.plot:
-        plot_aggregate(args.plot, aggregate, len(cases), args.repeat, args.max_paths, args.suite)
+        plot_aggregate(
+            args.plot,
+            aggregate,
+            len(cases),
+            args.repeat,
+            args.max_paths,
+            args.suite,
+            args.ban_heuristic,
+        )
     return 0
 
 

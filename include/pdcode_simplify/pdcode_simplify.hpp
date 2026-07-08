@@ -48,7 +48,8 @@ struct GreenCrossing {
 };
 
 struct SimplifierOptions {
-    int max_paths = 100;
+    int max_paths = -1;
+    bool ban_heuristic = false;
 };
 
 struct LinkComponentSummary {
@@ -98,6 +99,7 @@ struct PDSimplificationResult {
 struct SimplificationResult {
     bool found = false;
     Direction direction = Direction::Left;
+    std::string path_search_mode;
     std::vector<Endpoint> red_path;
     std::vector<int> green_path;
     std::vector<GreenCrossing> green_crossings;

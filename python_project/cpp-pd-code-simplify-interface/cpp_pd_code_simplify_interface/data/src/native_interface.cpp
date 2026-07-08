@@ -81,7 +81,8 @@ std::string result_to_json(
     append_component_counts(out, search_components);
     out << "},";
     out << "\"tested_red_paths\":" << result.tested_red_paths << ",";
-    out << "\"tested_green_paths\":" << result.tested_green_paths;
+    out << "\"tested_green_paths\":" << result.tested_green_paths << ",";
+    out << "\"path_search_mode\":\"" << json_escape(result.path_search_mode) << "\"";
     if (result.found) {
         out << ",";
         out << "\"direction\":\"" << pdcode_simplify::format_direction(result.direction) << "\",";
@@ -137,6 +138,7 @@ __declspec(dllexport)
 char* pdcode_simplify_run_json(
     const char* pd_text,
     int max_paths,
+    int ban_heuristic,
     unsigned long long known_crossingless_components,
     const int* removed_crossings,
     unsigned long long removed_crossing_count) {
@@ -148,6 +150,7 @@ char* pdcode_simplify_run_json(
         const std::string text(pd_text);
         pdcode_simplify::SimplifierOptions options;
         options.max_paths = max_paths;
+        options.ban_heuristic = ban_heuristic != 0;
 
         const pdcode_simplify::PDCode code = pdcode_simplify::parse_pd_code(text);
         std::size_t crossingless = static_cast<std::size_t>(known_crossingless_components);

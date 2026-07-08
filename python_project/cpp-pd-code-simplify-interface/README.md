@@ -27,6 +27,10 @@ result = simplify.simplify(pd_code)
 print(result["simplification_found"])
 ```
 
+The default `max_paths=-1` uses deterministic heuristic green-path sampling in
+the C++ backend. Use `ban_heuristic=True` to request exhaustive green-path
+enumeration for a manageable input.
+
 Batch use:
 
 ```python
@@ -52,7 +56,7 @@ Python process needs a 64-bit compiler target.
 Command-line use also supports multi-line PD-code files:
 
 ```sh
-python -m cpp_pd_code_simplify_interface --pd-file inputs.pd --max-paths 100
+python -m cpp_pd_code_simplify_interface --pd-file inputs.pd --max-paths -1
 ```
 
 ## Build And Publish

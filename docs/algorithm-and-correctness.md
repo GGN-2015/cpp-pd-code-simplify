@@ -68,6 +68,13 @@ green path from simply crossing the red boundary through its interior. The
 remaining dual graph is searched for simple paths with total weight less
 than the red path length.
 
+When `max_paths` is not `-1`, the implementation uses the original bounded
+depth-first collector. When `max_paths` is `-1`, the default collector is the
+shared C++/Python deterministic heuristic described in
+[Heuristic Path Sampling](heuristic-path-sampling.md). Passing
+`--ban-heuristic` with `max_paths=-1` restores exhaustive simple-path
+enumeration for the current red path.
+
 ## Green Path Validation
 
 A short green path in the dual graph is only a topological candidate. It
@@ -130,8 +137,10 @@ all long enough prefixes includes each such red arc.
 For a fixed red path, any valid simplifying disk must have its other
 boundary arc in the complement of the red interior. Assigning large weights
 to interior red dual edges excludes paths that cross through that boundary.
-The simple-path search over the dual graph therefore enumerates exactly the
-eligible green arcs up to the configured path cap.
+In brute-force mode, the simple-path search over the dual graph therefore
+enumerates exactly the eligible green arcs. In bounded and heuristic modes,
+the search is intentionally incomplete, but every candidate that reaches the
+validator is checked by the same crossing-consistency rules.
 
 The validation step is sound because it checks the local crossing
 constraints induced by the disk. A contradiction means some strand would be
@@ -139,6 +148,11 @@ forced to be both over and under, or two ends of the same diagram edge would
 receive inconsistent levels. If no contradiction is found, all strands met
 by the disk boundary admit a consistent over/under assignment, so the
 reported red and green paths describe a valid simplifying witness.
+
+Heuristic mode does not change this soundness argument because it only changes
+candidate ordering and sampling. It can miss a witness; it cannot make an
+unvalidated witness valid. Use `--ban-heuristic --max-paths -1` for complete
+green-path enumeration on inputs where that cost is acceptable.
 
 The component accounting is correct because a component is represented by
 the set of crossings visited while walking `next` along that component.
