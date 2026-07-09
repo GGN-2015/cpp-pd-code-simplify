@@ -184,7 +184,7 @@ def main() -> int:
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
-    assert "step_pd_code[1]: PD[X[2,1,1,2]]" in proc.stdout
+    assert "step_pd_code[1]: PD[X[1,2,2,1]]" in proc.stdout
     assert '"final_pd_code": "PD[]"' in proc.stdout
 
     brute = interface.simplify(TREFOIL, ban_heuristic=True, max_thread=1)

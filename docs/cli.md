@@ -111,11 +111,14 @@ legacy bounded path collector is used.
 
 `--reduction-round -1` is the default. It repeatedly applies valid
 mid-simplification witnesses. Use `--reduction-round K` to cap the number of
-applied mid-simplification rounds. In heuristic mode, whenever the heuristic
+applied mid-simplification rounds. Every generated PD code is canonicalized
+immediately after it is produced, including after each R1/nugatory deletion
+and after every applied witness. In heuristic mode, whenever the heuristic
 cannot find an applicable path before the round cap is exhausted, the
 executable runs a brute-force enumeration pass. If brute force finds a
 witness, that witness is applied and the next round starts again in heuristic
-mode; if brute force also fails, the diagram is treated as stable.
+mode. A diagram is treated as stable only after brute force also fails on the
+already-canonical current state.
 Verbose log lines are prefixed with local wall-clock time in
 `YYYY-MM-DD HH:MM:SS` format. When `--max-thread -1` reaches a brute-force
 search phase, verbose logs also include `actual_threads`, the worker count
@@ -128,10 +131,11 @@ output include `timed_out`; in batch mode, later jobs continue. Pressing
 `Ctrl+C` requests cooperative cancellation and exits with status `130`.
 
 `--show-step-pd` prints `step_pd_code[ROUND]: PD[...]` immediately after each
-mid-simplification witness is applied and before the automatic R1/nugatory
-cleanup for that round. In batch mode the line is prefixed with the input
-label. This diagnostic output uses stdout and is therefore intentionally off
-by default, especially when `--json` output will be parsed by another program.
+mid-simplification witness is applied and canonicalized, before the automatic
+R1/nugatory cleanup for that round. In batch mode the line is prefixed with
+the input label. This diagnostic output uses stdout and is therefore
+intentionally off by default, especially when `--json` output will be parsed
+by another program.
 
 ## Component Accounting
 

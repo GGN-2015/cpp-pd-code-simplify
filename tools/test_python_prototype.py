@@ -67,13 +67,38 @@ def main() -> int:
         same_face_result.crossingless_components == 1,
         "Python same-face green path unknot should preserve one crossingless component",
     )
+    canonical_regression = simplify.parse_pd_code(
+        "[[3,88,4,1],[4,2,5,1],[5,2,6,3],[9,7,10,6],"
+        "[10,7,11,8],[11,9,12,8],[15,12,16,13],[16,14,17,13],"
+        "[17,14,18,15],[21,19,22,18],[22,25,23,26],[23,20,24,21],"
+        "[24,20,25,19],[28,31,29,32],[32,27,33,28],[33,27,34,26],"
+        "[34,29,35,30],[35,31,36,30],[36,39,37,40],[37,41,38,40],"
+        "[38,41,39,42],[55,53,56,52],[56,53,57,54],[57,55,58,54],"
+        "[61,50,62,51],[62,50,63,49],[64,47,65,48],[66,46,67,45],"
+        "[68,64,69,63],[69,48,70,49],[70,65,71,66],[71,47,72,46],"
+        "[72,68,73,67],[73,61,74,60],[74,59,75,60],[75,59,76,58],"
+        "[76,51,77,52],[79,43,80,42],[81,44,82,45],[83,79,84,78],"
+        "[84,77,85,78],[85,82,86,83],[86,44,87,43],[87,81,88,80]]"
+    )
+    canonical_result = simplify.reduce_pd_code(
+        canonical_regression,
+        max_thread=16,
+    )
+    require(
+        canonical_result.to_json()["final_pd_code"] == "PD[]",
+        "Python per-step canonicalization regression should reduce to PD[]",
+    )
+    require(
+        canonical_result.crossingless_components == 1,
+        "Python per-step canonicalization regression should preserve the unknot component",
+    )
     step_stdout = io.StringIO()
     with contextlib.redirect_stdout(step_stdout):
         step_result = simplify.reduce_pd_code(same_face_green, show_step_pd=True)
     require(step_result.to_json()["final_pd_code"] == "PD[]", "step-output run should still simplify")
     require(
-        "step_pd_code[1]: PD[X[2,1,1,2]]" in step_stdout.getvalue(),
-        "Python show_step_pd should print the PD code after applying a witness",
+        "step_pd_code[1]: PD[X[1,2,2,1]]" in step_stdout.getvalue(),
+        "Python show_step_pd should print the canonical PD code after applying a witness",
     )
 
     progress_log = []

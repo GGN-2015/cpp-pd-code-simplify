@@ -59,7 +59,8 @@ the C++ backend for that phase. The backend call runs in a helper process, so
 `Ctrl+C` can terminate active C++ work and its worker threads cleanly.
 Use `show_step_pd=True`, or CLI flag `--show-step-pd`, to print
 `step_pd_code[ROUND]: PD[...]` to stdout after each mid-simplification witness
-is applied and before that round's automatic R1/nugatory cleanup.
+is applied and canonicalized, before that round's automatic R1/nugatory
+cleanup.
 
 Batch use:
 

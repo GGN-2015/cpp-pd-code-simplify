@@ -309,6 +309,29 @@ void test_same_face_green_path_unknot() {
             "same-face green path unknot should preserve the crossingless component");
 }
 
+void test_canonicalize_after_each_reduction() {
+    const auto code = pdcode_simplify::parse_pd_code(
+        "[[3,88,4,1],[4,2,5,1],[5,2,6,3],[9,7,10,6],"
+        "[10,7,11,8],[11,9,12,8],[15,12,16,13],[16,14,17,13],"
+        "[17,14,18,15],[21,19,22,18],[22,25,23,26],[23,20,24,21],"
+        "[24,20,25,19],[28,31,29,32],[32,27,33,28],[33,27,34,26],"
+        "[34,29,35,30],[35,31,36,30],[36,39,37,40],[37,41,38,40],"
+        "[38,41,39,42],[55,53,56,52],[56,53,57,54],[57,55,58,54],"
+        "[61,50,62,51],[62,50,63,49],[64,47,65,48],[66,46,67,45],"
+        "[68,64,69,63],[69,48,70,49],[70,65,71,66],[71,47,72,46],"
+        "[72,68,73,67],[73,61,74,60],[74,59,75,60],[75,59,76,58],"
+        "[76,51,77,52],[79,43,80,42],[81,44,82,45],[83,79,84,78],"
+        "[84,77,85,78],[85,82,86,83],[86,44,87,43],[87,81,88,80]]");
+    pdcode_simplify::SimplifierOptions options;
+    options.max_threads = 16;
+
+    const auto reduced = pdcode_simplify::reduce_pd_code(code, 0, options, -1);
+    require(reduced.code.empty(),
+            "per-step canonicalization should let the 44-crossing unknot reduce to PD[]");
+    require(reduced.crossingless_components == 1,
+            "per-step canonicalization regression should preserve the unknot component");
+}
+
 void test_step_pd_callback() {
     const auto code = pdcode_simplify::parse_pd_code(
         "PD[X[1,5,2,4],X[2,5,3,6],X[6,3,1,4]]");
@@ -324,8 +347,8 @@ void test_step_pd_callback() {
     require(reduced.mid_simplification_rounds == 1,
             "step callback fixture should apply one witness");
     require(steps.size() == 1, "step callback should run once per applied witness");
-    require(steps.front() == "1:PD[X[2,1,1,2]]",
-            "step callback should receive the PD code immediately after witness application");
+    require(steps.front() == "1:PD[X[1,2,2,1]]",
+            "step callback should receive the canonical PD code after witness application");
 }
 
 }  // namespace
@@ -344,6 +367,7 @@ int main() {
         test_r1_random_inflate_then_pre_simplify();
         test_reference_sample();
         test_same_face_green_path_unknot();
+        test_canonicalize_after_each_reduction();
         test_step_pd_callback();
         std::cout << "All tests passed\n";
         return EXIT_SUCCESS;

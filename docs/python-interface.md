@@ -88,8 +88,9 @@ worker threads cleanly before the Python process exits.
 
 Pass `show_step_pd=True`, or use CLI flag `--show-step-pd`, to print
 `step_pd_code[ROUND]: PD[...]` to stdout after each mid-simplification witness
-is applied and before that round's automatic R1/nugatory cleanup. This is a
-diagnostic stream and is disabled by default because it can be large.
+is applied and canonicalized, before that round's automatic R1/nugatory
+cleanup. This is a diagnostic stream and is disabled by default because it can
+be large.
 
 Batch use:
 

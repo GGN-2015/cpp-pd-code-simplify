@@ -81,7 +81,7 @@ void print_help(const char* program) {
         << "Use --max-thread N to cap brute-force worker threads; -1 means auto.\n"
         << "Use --timeout K to cap each PD-code job in seconds; -1 means no timeout.\n"
         << "Use --verbose to print progress logs to stderr.\n"
-        << "Use --show-step-pd to print the PD code after each witness application.\n"
+        << "Use --show-step-pd to print the canonical PD code after each witness application.\n"
         << "If no input is given, the CLI tries to read PD.txt from the current directory.\n";
 }
 

@@ -31,9 +31,11 @@ Use `--json` for structured output containing `final_pd_code` and
 mid-simplification rounds; the default `-1` runs until stable. In heuristic
 mode, a heuristic miss is followed by a brute-force check before the current
 diagram is treated as stable. If brute force finds a witness, the next round
-returns to heuristic mode. Use `--timeout K` to cap each PD-code job at `K`
-seconds; the default `-1` has no timeout. A timed-out job returns the best PD
-code found so far and sets `timed_out` in JSON/text output. Use `--verbose`
+returns to heuristic mode. Every generated PD code is canonicalized
+immediately after it is produced, including after each R1/nugatory deletion
+and after every applied witness. Use `--timeout K` to cap each PD-code job at
+`K` seconds; the default `-1` has no timeout. A timed-out job returns the best
+PD code found so far and sets `timed_out` in JSON/text output. Use `--verbose`
 to print timestamped progress logs to stderr. Verbose log lines use local wall-clock time in
 `YYYY-MM-DD HH:MM:SS` format. When `--max-thread -1` reaches a brute-force
 search phase, verbose logs also include `actual_threads`, the worker count
@@ -44,9 +46,9 @@ renumbered along oriented components from `1`, and crossing rows are sorted
 lexicographically.
 
 Use `--show-step-pd` to print `step_pd_code[ROUND]: PD[...]` to stdout after
-each mid-simplification witness is applied and before that round's automatic
-R1/nugatory cleanup. This diagnostic output is disabled by default because it
-can be large and shares stdout with JSON/text results.
+each mid-simplification witness is applied and canonicalized, before that
+round's automatic R1/nugatory cleanup. This diagnostic output is disabled by
+default because it can be large and shares stdout with JSON/text results.
 
 Report crossingless components after removing all trefoil crossings:
 

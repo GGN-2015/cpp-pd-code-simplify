@@ -144,10 +144,20 @@ and nugatory preprocessing again. This can expose additional local
 simplifications before the next mid-simplification search round.
 
 `--reduction-round K` caps the number of applied mid-simplification rounds.
+After every operation that produces a new PD code, including an applied
+mid-simplification witness and each R1/nugatory deletion, the implementation
+immediately rebuilds the internal state from the canonical output form. This
+canonicalization relabels each component from 1, sorts crossings, and rotates
+each crossing so the displayed row starts at the under-incoming strand. It is
+not a topological move; it only prevents later searches from depending on a
+stale internal row order, edge numbering, or crossing orientation.
+
 The default `--reduction-round -1` repeats until no applicable witness remains.
 In default heuristic mode, if the heuristic cannot find a witness, the
-simplifier runs a brute-force pass. If brute force finds a witness, the loop
-continues; if not, the current PD code is reported as the final result.
+simplifier runs a brute-force pass from the already-canonical current diagram.
+If brute force finds a witness, that witness is applied, canonicalized, and the
+loop continues in heuristic mode. The diagram is reported as final only when
+the brute-force pass also fails to find a witness.
 
 ## Component Accounting
 

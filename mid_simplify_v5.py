@@ -764,12 +764,13 @@ def erase_r1_moves(
             if len(singles) == 2:
                 result = replace_label(result, singles[0], singles[1])
             crossingless_components = after_removal.crossingless_components
+            result = _canonical_output_code(result)
             moves += 1
             changed = True
             break
         if not changed:
             break
-    return renumber_r1_order(result), crossingless_components, moves
+    return _canonical_output_code(renumber_r1_order(result)), crossingless_components, moves
 
 
 def add_set_edge(graph: Dict[int, Set[int]], a: int, b: int) -> None:
@@ -919,7 +920,7 @@ def erase_one_nugatory_crossing(
     result.pop(index)
     result = replace_label(result, ax, cx)
     result = replace_label(result, dx, bx)
-    return renumber_full_dfs(result), after_removal.crossingless_components
+    return _canonical_output_code(renumber_full_dfs(result)), after_removal.crossingless_components
 
 
 def simplify_pd_code(
@@ -927,7 +928,7 @@ def simplify_pd_code(
     known_crossingless_components: int = 0,
 ) -> PDSimplificationResult:
     result = PDSimplificationResult(
-        code=[tuple(crossing) for crossing in code],
+        code=_canonical_output_code([tuple(crossing) for crossing in code]),
         crossingless_components=known_crossingless_components,
     )
     result.code, result.crossingless_components, result.reidemeister_i_moves = erase_r1_moves(
@@ -2002,6 +2003,10 @@ def _search_mode(max_paths: int, ban_heuristic: bool) -> str:
     return "bounded"
 
 
+def _canonical_output_code(code: PDCode) -> PDCode:
+    return parse_pd_code(format_final_pd_code(code))
+
+
 def reduce_pd_code(
     code: PDCode,
     known_crossingless_components: int = 0,
@@ -2037,7 +2042,7 @@ def reduce_pd_code(
             ),
         )
         prepared = simplify_pd_code(code, known_crossingless_components)
-        output.code = prepared.code
+        output.code = _canonical_output_code(prepared.code)
         output.crossingless_components = prepared.crossingless_components
         output.reidemeister_i_moves = prepared.reidemeister_i_moves
         output.nugatory_crossing_moves = prepared.nugatory_crossing_moves
@@ -2149,13 +2154,14 @@ def reduce_pd_code(
                 search,
                 output.crossingless_components,
             )
+            reduced_code = _canonical_output_code(reduced_code)
             output.mid_simplification_rounds += 1
             _emit_step_pd(show_step_pd, step_pd_output, round_index, reduced_code)
             output.code = reduced_code
             output.crossingless_components = reduced_crossingless
             check_timeout(timeout, deadline)
             prepared = simplify_pd_code(output.code, output.crossingless_components)
-            output.code = prepared.code
+            output.code = _canonical_output_code(prepared.code)
             output.crossingless_components = prepared.crossingless_components
             output.reidemeister_i_moves += prepared.reidemeister_i_moves
             output.nugatory_crossing_moves += prepared.nugatory_crossing_moves

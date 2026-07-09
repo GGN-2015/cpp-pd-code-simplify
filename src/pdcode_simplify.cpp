@@ -68,6 +68,8 @@ struct CrossingState {
 
 using LabelMap = std::unordered_map<int, std::vector<Endpoint>>;
 
+PDCode canonical_output_code(const PDCode& code);
+
 LabelMap build_label_map(const PDCode& code) {
     LabelMap labels;
     for (int c = 0; c < static_cast<int>(code.size()); ++c) {
@@ -227,6 +229,7 @@ PDCode erase_r1_moves(PDCode code, std::size_t& crossingless_components, int& mo
             }
 
             crossingless_components = after_removal.crossingless_components;
+            code = canonical_output_code(code);
             ++moves;
             changed = true;
             break;
@@ -237,7 +240,7 @@ PDCode erase_r1_moves(PDCode code, std::size_t& crossingless_components, int& mo
         }
     }
 
-    return renumber_r1_order(code);
+    return canonical_output_code(renumber_r1_order(code));
 }
 
 std::map<int, std::set<int>> base_pd_graph(const PDCode& code) {
@@ -457,7 +460,7 @@ PDCode erase_one_nugatory_crossing(
     code = replace_arc_value(code, dx, bx);
     crossingless_components = after_removal.crossingless_components;
     ++moves;
-    return renumber_full_dfs(code);
+    return canonical_output_code(renumber_full_dfs(code));
 }
 
 std::vector<std::vector<int>> raw_faces_from_pd_code(const PDCode& code) {
@@ -1842,6 +1845,10 @@ void emit_step_pd(const SimplifierOptions& options, int round, const PDCode& cod
     }
 }
 
+PDCode canonical_output_code(const PDCode& code) {
+    return parse_pd_code(format_final_pd_code(code));
+}
+
 std::string search_mode_for_options(const SimplifierOptions& options) {
     if (options.max_paths == -1 && !options.ban_heuristic) {
         return "heuristic";
@@ -2187,7 +2194,7 @@ PDSimplificationResult simplify_pd_code(
     const PDCode& code,
     std::size_t known_crossingless_components) {
     PDSimplificationResult result;
-    result.code = code;
+    result.code = canonical_output_code(code);
     result.crossingless_components = known_crossingless_components;
 
     result.code = erase_r1_moves(
@@ -2555,7 +2562,7 @@ ReductionResult reduce_pd_code(
 
         const PDSimplificationResult prepared =
             simplify_pd_code(code, known_crossingless_components);
-        output.code = prepared.code;
+        output.code = canonical_output_code(prepared.code);
         output.crossingless_components = prepared.crossingless_components;
         output.reidemeister_i_moves = prepared.reidemeister_i_moves;
         output.nugatory_crossing_moves = prepared.nugatory_crossing_moves;
@@ -2643,14 +2650,15 @@ ReductionResult reduce_pd_code(
             check_timeout(run_options);
             const MidSimplificationApplyResult applied =
                 apply_simplification_witness(output.code, search, output.crossingless_components);
+            const PDCode applied_code = canonical_output_code(applied.code);
             ++output.mid_simplification_rounds;
-            emit_step_pd(run_options, round, applied.code);
-            output.code = applied.code;
+            emit_step_pd(run_options, round, applied_code);
+            output.code = applied_code;
             output.crossingless_components = applied.crossingless_components;
             check_timeout(run_options);
             const PDSimplificationResult simplified =
                 simplify_pd_code(output.code, output.crossingless_components);
-            output.code = simplified.code;
+            output.code = canonical_output_code(simplified.code);
             output.crossingless_components = simplified.crossingless_components;
             output.reidemeister_i_moves += simplified.reidemeister_i_moves;
             output.nugatory_crossing_moves += simplified.nugatory_crossing_moves;
