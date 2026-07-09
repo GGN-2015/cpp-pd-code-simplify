@@ -2,13 +2,15 @@
 
 This project uses a Python packaging helper as its build and packaging entry
 point. The script works on Windows, Linux, and macOS as long as Python 3 and a
-C++14 compiler are available.
+C++17 compiler are available.
 
 ## Requirements
 
 - Python 3.8 or newer.
-- A C++14 compiler:
-  - Windows: MinGW `g++`, LLVM `clang++`, or MSVC `cl`.
+- A C++17 compiler:
+  - Windows: MinGW-w64 `g++`, LLVM `clang++`, or MSVC `cl`. Legacy MinGW.org
+    toolchains are not supported because they do not provide the C++ threading
+    runtime used by the simplifier.
   - Linux: `c++`, `g++`, or `clang++`.
   - macOS: Apple Clang or another `clang++`/`c++` compiler.
 

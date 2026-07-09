@@ -298,7 +298,7 @@ def _library_suffix() -> str:
 
 
 def _default_compile_flags(include_dir: pathlib.Path, library_path: pathlib.Path) -> list[str]:
-    flags = ["-std=c++14", "-O3", "-DNDEBUG", "-I" + str(include_dir)]
+    flags = ["-std=c++17", "-O3", "-DNDEBUG", "-I" + str(include_dir)]
     system = platform.system()
     if system != "Windows":
         flags.append("-fPIC")
@@ -320,6 +320,36 @@ def _default_compile_flags(include_dir: pathlib.Path, library_path: pathlib.Path
     if extra:
         flags.extend(shlex.split(extra))
     return flags
+
+
+def _thread_runtime_compile_hint(message: str) -> Optional[str]:
+    lowered = message.lower()
+    needles = (
+        "std::thread",
+        "std::mutex",
+        "'thread' is not a member of 'std'",
+        "'mutex' is not a member of 'std'",
+        "localtime_s",
+    )
+    if not any(needle.lower() in lowered for needle in needles):
+        return None
+
+    compiler = cpp_simple_interface.get_gpp_filepath().strip() or "the selected compiler"
+    return (
+        "\n\nThe selected C++ compiler does not appear to provide the C++ "
+        f"threading/runtime support required by cpp-pd-code-simplify: {compiler}. "
+        "On Windows, legacy MinGW.org toolchains are known to fail here; use a "
+        "modern 64-bit MinGW-w64/UCRT, Clang, or MSVC-compatible toolchain whose "
+        "target architecture matches Python, and set CXX to that compiler before "
+        "running this package."
+    )
+
+
+def _format_compile_failure(message: str) -> str:
+    hint = _thread_runtime_compile_hint(message)
+    if hint is None:
+        return message
+    return message + hint
 
 
 def _cache_key(source_bytes: bytes, flags: Sequence[str]) -> str:
@@ -781,7 +811,7 @@ def compile_simplifier(
             )
 
         if not success:
-            raise PdCodeSimplifyInterfaceError(message)
+            raise PdCodeSimplifyInterfaceError(_format_compile_failure(message))
         if not tmp_library.exists():
             raise PdCodeSimplifyInterfaceError(f"compiled dynamic library was not created: {tmp_library}")
         os.replace(tmp_library, library)

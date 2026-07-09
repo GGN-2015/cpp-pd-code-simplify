@@ -76,9 +76,9 @@ def config_flags(config: str, msvc: bool) -> List[str]:
 
 def common_flags(config: str, msvc: bool) -> List[str]:
     if msvc:
-        return ["/std:c++14", "/EHsc", "/Iinclude"] + config_flags(config, msvc)
+        return ["/std:c++17", "/EHsc", "/Iinclude"] + config_flags(config, msvc)
     return [
-        "-std=c++14",
+        "-std=c++17",
         "-Wall",
         "-Wextra",
         "-Wpedantic",
@@ -210,13 +210,17 @@ def build_shared_library(args: argparse.Namespace) -> Path:
 def run_tests(args: argparse.Namespace) -> None:
     executable = build_executable(args)
     test_app = build_tests(args)
-    run([str(test_app)])
     env = os.environ.copy()
     env["PD_SIMPLIFY_EXECUTABLE"] = str(executable)
     env.setdefault("CXX", args.cxx)
     compiler = compiler_path(args.cxx)
     if compiler is not None:
         env["PATH"] = str(compiler.parent) + os.pathsep + env.get("PATH", "")
+        if host_platform() == "linux":
+            env["LD_LIBRARY_PATH"] = str(compiler.parent) + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+        elif host_platform() == "macos":
+            env["DYLD_LIBRARY_PATH"] = str(compiler.parent) + os.pathsep + env.get("DYLD_LIBRARY_PATH", "")
+    run([str(test_app)], env=env)
     run([sys.executable, "tools/test_cpp_output_diagram_sanity.py"], env=env)
     run(
         [
@@ -403,7 +407,7 @@ def package_project(args: argparse.Namespace) -> Path:
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--build-dir", default="build", help="intermediate build directory")
     parser.add_argument("--config", default="release", choices=["release", "debug"], help="build configuration")
-    parser.add_argument("--cxx", default=default_compiler(), help="C++14 compiler command")
+    parser.add_argument("--cxx", default=default_compiler(), help="C++17 compiler command")
 
 
 def build_parser() -> argparse.ArgumentParser:

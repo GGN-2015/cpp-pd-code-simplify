@@ -11,7 +11,7 @@ pip install cpp-pd-code-simplify-interface
 
 It ships the C++ source code inside the wheel and source distribution. On first
 use, the package compiles a cached local dynamic library through
-`cpp-simple-interface`; later calls reuse that library through `ctypes`. A C++14
+`cpp-simple-interface`; later calls reuse that library through `ctypes`. A C++17
 compiler compatible with `g++` must be available at runtime.
 
 Runtime dependencies are handled per platform. On Windows, the interface uses
@@ -84,7 +84,9 @@ python your_script.py
 ```
 
 On Windows, use a compiler whose target architecture matches Python. A 64-bit
-Python process needs a 64-bit compiler target.
+Python process needs a 64-bit MinGW-w64/UCRT, Clang, or MSVC-compatible
+compiler target. Legacy MinGW.org toolchains are not supported because they do
+not provide the C++ threading runtime used by the simplifier.
 
 Command-line use also supports multi-line PD-code files:
 

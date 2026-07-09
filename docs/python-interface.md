@@ -26,7 +26,7 @@ After publication:
 pip install cpp-pd-code-simplify-interface
 ```
 
-A C++14 compiler compatible with `g++` must be available at runtime. Set `CXX`
+A C++17 compiler compatible with `g++` must be available at runtime. Set `CXX`
 to select a compiler:
 
 ```sh
@@ -41,9 +41,11 @@ python your_script.py
 ```
 
 On Windows, the compiler target must match the Python process architecture.
-For example, 64-bit Python needs a 64-bit MinGW or Clang toolchain. After
-compilation, the interface inspects the generated DLL with `objdump -p` or
-`dumpbin /DEPENDENTS` when available and copies MinGW runtime DLLs into the
+For example, 64-bit Python needs a 64-bit MinGW-w64/UCRT, Clang, or
+MSVC-compatible toolchain. Legacy MinGW.org toolchains are not supported
+because they do not provide the C++ threading runtime used by the simplifier.
+After compilation, the interface inspects the generated DLL with `objdump -p`
+or `dumpbin /DEPENDENTS` when available and copies MinGW runtime DLLs into the
 same cache directory as the generated DLL.
 
 On Linux, the generated shared object is built with `$ORIGIN` rpath and the

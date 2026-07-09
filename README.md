@@ -1,6 +1,6 @@
 # cpp-pd-code-simplify
 
-A dependency-free C++14 project for simplifying knot and link planar diagram
+A dependency-free C++17 project for simplifying knot and link planar diagram
 codes. The repository also includes a refactored Python prototype for
 differential testing. User-facing tools first remove R1 moves, true R2 bigons,
 and nugatory crossings, then iteratively find and apply mid-simplification
@@ -52,9 +52,11 @@ pip install cpp-pd-code-simplify-interface
 python -m cpp_pd_code_simplify_interface "PD[]"
 ```
 
-The package compiles a cached local dynamic library on first use, so a C++14
-compiler must be available. The interface caches non-system compiler runtime
-libraries beside that dynamic library when needed. From Python:
+The package compiles a cached local dynamic library on first use, so a C++17
+compiler must be available. On Windows, use a 64-bit MinGW-w64/UCRT, Clang, or
+MSVC-compatible compiler for 64-bit Python; legacy MinGW.org toolchains are not
+supported. The interface caches non-system compiler runtime libraries beside
+that dynamic library when needed. From Python:
 
 ```python
 import cpp_pd_code_simplify_interface as simplify
