@@ -59,6 +59,7 @@ struct SimplifierOptions {
     bool require_applicable = false;
     bool verbose = false;
     std::function<void(const std::string&)> progress;
+    std::function<void(int, const PDCode&)> step_pd_output;
     std::function<bool()> should_cancel;
 };
 

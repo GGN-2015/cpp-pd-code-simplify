@@ -15,6 +15,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 from importlib import resources
 from typing import Any, Optional, Sequence, Union
 
@@ -763,6 +764,7 @@ def _load_library() -> ctypes.CDLL:
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_int,
+        ctypes.c_int,
         ctypes.c_ulonglong,
         ctypes.POINTER(ctypes.c_int),
         ctypes.c_ulonglong,
@@ -784,6 +786,7 @@ def _run_one_direct(
     max_thread: int = -1,
     timeout: int = -1,
     verbose: bool = False,
+    show_step_pd: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
 ) -> dict[str, Any]:
@@ -807,6 +810,7 @@ def _run_one_direct(
         int(max_thread),
         int(timeout),
         1 if verbose else 0,
+        1 if show_step_pd else 0,
         int(known_crossingless_components),
         removed_array,
         int(removed_count),
@@ -847,6 +851,7 @@ def _run_one(
     max_thread: int = -1,
     timeout: int = -1,
     verbose: bool = False,
+    show_step_pd: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
 ) -> dict[str, Any]:
@@ -865,43 +870,62 @@ def _run_one(
         "max_thread": int(max_thread),
         "timeout": int(timeout),
         "verbose": bool(verbose),
+        "show_step_pd": bool(show_step_pd),
         "known_crossingless_components": int(known_crossingless_components),
         "remove_crossings": [int(value) for value in remove_crossings or []],
     }
+    protocol_output_path: Optional[pathlib.Path] = None
+    if show_step_pd:
+        fd, protocol_name = tempfile.mkstemp(
+            prefix="cpp-pd-code-simplify-interface-",
+            suffix=".json",
+        )
+        os.close(fd)
+        protocol_output_path = pathlib.Path(protocol_name)
+        request["protocol_output_path"] = str(protocol_output_path)
     env = os.environ.copy()
     project_root = str(pathlib.Path(__file__).resolve().parents[1])
     env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "cpp_pd_code_simplify_interface._worker",
-        ],
-        cwd=str(pathlib.Path.cwd()),
-        text=True,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=None if verbose else subprocess.PIPE,
-        env=env,
-    )
     try:
-        stdout, stderr = proc.communicate(json.dumps(request))
-    except KeyboardInterrupt:
-        _terminate_process(proc)
-        raise
-
-    if proc.returncode != 0:
-        detail = (stderr or "").strip()
-        raise PdCodeSimplifyInterfaceError(
-            f"C++ interface worker failed with exit code {proc.returncode}"
-            + (f": {detail}" if detail else "")
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "cpp_pd_code_simplify_interface._worker",
+            ],
+            cwd=str(pathlib.Path.cwd()),
+            text=True,
+            stdin=subprocess.PIPE,
+            stdout=None if show_step_pd else subprocess.PIPE,
+            stderr=None if verbose else subprocess.PIPE,
+            env=env,
         )
-    try:
-        envelope = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise PdCodeSimplifyInterfaceError(
-            f"invalid interface worker JSON output: {stdout!r}"
-        ) from exc
+        try:
+            stdout, stderr = proc.communicate(json.dumps(request))
+        except KeyboardInterrupt:
+            _terminate_process(proc)
+            raise
+
+        if proc.returncode != 0:
+            detail = (stderr or "").strip()
+            raise PdCodeSimplifyInterfaceError(
+                f"C++ interface worker failed with exit code {proc.returncode}"
+                + (f": {detail}" if detail else "")
+            )
+        if protocol_output_path is not None:
+            stdout = protocol_output_path.read_text(encoding="utf-8")
+        try:
+            envelope = json.loads(stdout or "")
+        except json.JSONDecodeError as exc:
+            raise PdCodeSimplifyInterfaceError(
+                f"invalid interface worker JSON output: {stdout!r}"
+            ) from exc
+    finally:
+        if protocol_output_path is not None:
+            try:
+                protocol_output_path.unlink()
+            except FileNotFoundError:
+                pass
     if not isinstance(envelope, dict):
         raise PdCodeSimplifyInterfaceError(
             f"invalid interface worker response type: {type(envelope)!r}"
@@ -923,6 +947,7 @@ def simplify(
     max_thread: int = -1,
     timeout: int = -1,
     verbose: bool = False,
+    show_step_pd: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
 ) -> dict[str, Any]:
@@ -936,6 +961,7 @@ def simplify(
         max_thread=max_thread,
         timeout=timeout,
         verbose=verbose,
+        show_step_pd=show_step_pd,
         known_crossingless_components=known_crossingless_components,
         remove_crossings=remove_crossings,
     )
@@ -950,6 +976,7 @@ def simplify_many(
     max_thread: int = -1,
     timeout: int = -1,
     verbose: bool = False,
+    show_step_pd: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
 ) -> list[dict[str, Any]]:
@@ -964,6 +991,7 @@ def simplify_many(
             max_thread=max_thread,
             timeout=timeout,
             verbose=verbose,
+            show_step_pd=show_step_pd,
             known_crossingless_components=known_crossingless_components,
             remove_crossings=remove_crossings,
         )
@@ -982,6 +1010,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--max-thread", type=int, default=-1)
     parser.add_argument("--timeout", type=int, default=-1)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--show-step-pd", action="store_true")
     parser.add_argument("--known-crossingless-components", type=int, default=0)
     parser.add_argument("--remove-crossings", help="comma-separated zero-based crossing indices")
     args = parser.parse_args(argv)
@@ -1017,6 +1046,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     max_thread=args.max_thread,
                     timeout=args.timeout,
                     verbose=args.verbose,
+                    show_step_pd=args.show_step_pd,
                     known_crossingless_components=args.known_crossingless_components,
                     remove_crossings=remove_crossings,
                 )
@@ -1049,6 +1079,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 max_thread=args.max_thread,
                 timeout=args.timeout,
                 verbose=args.verbose,
+                show_step_pd=args.show_step_pd,
                 known_crossingless_components=args.known_crossingless_components,
                 remove_crossings=remove_crossings,
             )

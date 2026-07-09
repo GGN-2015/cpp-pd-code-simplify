@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 from pathlib import Path
 
@@ -64,6 +66,14 @@ def main() -> int:
     require(
         same_face_result.crossingless_components == 1,
         "Python same-face green path unknot should preserve one crossingless component",
+    )
+    step_stdout = io.StringIO()
+    with contextlib.redirect_stdout(step_stdout):
+        step_result = simplify.reduce_pd_code(same_face_green, show_step_pd=True)
+    require(step_result.to_json()["final_pd_code"] == "PD[]", "step-output run should still simplify")
+    require(
+        "step_pd_code[1]: PD[X[2,1,1,2]]" in step_stdout.getvalue(),
+        "Python show_step_pd should print the PD code after applying a witness",
     )
 
     progress_log = []

@@ -97,6 +97,7 @@ component.
 --reduction-round K            Maximum mid-simplification rounds; -1 means until stable.
 --timeout K                    Per-PD-code timeout in seconds; -1 means no timeout.
 --verbose                      Print timestamped progress logs to stderr.
+--show-step-pd                 Print each post-witness PD code to stdout.
 --known-crossingless-components N
                                Add N components not representable in PD code.
 --remove-crossings LIST        Report component counts after removing crossings.
@@ -123,6 +124,12 @@ selected for that phase.
 `K` seconds and still prints the best PD code found so far. JSON and text
 output include `timed_out`; in batch mode, later jobs continue. Pressing
 `Ctrl+C` requests cooperative cancellation and exits with status `130`.
+
+`--show-step-pd` prints `step_pd_code[ROUND]: PD[...]` immediately after each
+mid-simplification witness is applied and before the automatic R1/nugatory
+cleanup for that round. In batch mode the line is prefixed with the input
+label. This diagnostic output uses stdout and is therefore intentionally off
+by default, especially when `--json` output will be parsed by another program.
 
 ## Component Accounting
 

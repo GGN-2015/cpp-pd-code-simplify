@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -56,7 +57,8 @@ def main() -> int:
     if "CPP_PD_CODE_SIMPLIFY_INTERFACE_CACHE_DIR" not in os.environ:
         os.environ["CPP_PD_CODE_SIMPLIFY_INTERFACE_CACHE_DIR"] = str(ROOT / ".cache" / "python-interface")
 
-    library = interface.compile_simplifier(force=True, cxx=preferred_cxx())
+    cxx = preferred_cxx()
+    library = interface.compile_simplifier(force=True, cxx=cxx)
     assert library.exists(), library
     if os.name == "nt":
         imported = (
@@ -109,6 +111,31 @@ def main() -> int:
     assert same_face_green["final_pd_code"] == "PD[]"
     assert same_face_green["mid_simplification_rounds"] == 1
     assert same_face_green["final_components"]["crossingless_components"] == 1
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(INTERFACE_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    if cxx:
+        env["CXX"] = cxx
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cpp_pd_code_simplify_interface",
+            "--pd-code",
+            SAME_FACE_GREEN_UNKNOT,
+            "--max-thread",
+            "1",
+            "--show-step-pd",
+        ],
+        cwd=str(ROOT),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "step_pd_code[1]: PD[X[2,1,1,2]]" in proc.stdout
+    assert '"final_pd_code": "PD[]"' in proc.stdout
 
     brute = interface.simplify(TREFOIL, ban_heuristic=True, max_thread=1)
     brute_parallel = interface.simplify(TREFOIL, ban_heuristic=True, max_thread=4)

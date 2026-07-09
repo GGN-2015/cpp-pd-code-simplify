@@ -42,6 +42,11 @@ display: each crossing is written from the under-incoming edge, labels are
 renumbered along oriented components from `1`, and crossing rows are sorted
 lexicographically.
 
+Use `--show-step-pd` to print `step_pd_code[ROUND]: PD[...]` to stdout after
+each mid-simplification witness is applied and before that round's automatic
+R1/nugatory cleanup. This diagnostic output is disabled by default because it
+can be large and shares stdout with JSON/text results.
+
 Report crossingless components after removing all trefoil crossings:
 
 ```sh
@@ -67,6 +72,9 @@ when presenting the final PD code to users. The plain `format_pd_code`
 function preserves the internal tuple order and labels.
 If `reduce_pd_code(..., timeout=K)` exceeds its deadline, it returns the
 current best result with `result.timed_out == True`.
+Pass `show_step_pd=True` to `reduce_pd_code` to print each post-witness PD
+code, or pass `step_pd_output=callable` to receive `(round_index, code)` in
+Python code.
 
 Component accounting is available directly:
 

@@ -136,6 +136,7 @@ char* pdcode_simplify_run_json(
     int max_thread,
     int timeout_seconds,
     int verbose,
+    int show_step_pd,
     unsigned long long known_crossingless_components,
     const int* removed_crossings,
     unsigned long long removed_crossing_count) {
@@ -154,6 +155,14 @@ char* pdcode_simplify_run_json(
         options.progress = [](const std::string& message) {
             print_progress_log(message);
         };
+        if (show_step_pd != 0) {
+            options.step_pd_output = [](int round, const pdcode_simplify::PDCode& step_code) {
+                std::cout << "step_pd_code[" << round << "]: "
+                          << pdcode_simplify::format_final_pd_code(step_code)
+                          << '\n';
+                std::cout.flush();
+            };
+        }
 
         const pdcode_simplify::PDCode code = pdcode_simplify::parse_pd_code(text);
         std::size_t crossingless = static_cast<std::size_t>(known_crossingless_components);

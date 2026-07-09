@@ -81,6 +81,7 @@ void print_help(const char* program) {
         << "Use --max-thread N to cap brute-force worker threads; -1 means auto.\n"
         << "Use --timeout K to cap each PD-code job in seconds; -1 means no timeout.\n"
         << "Use --verbose to print progress logs to stderr.\n"
+        << "Use --show-step-pd to print the PD code after each witness application.\n"
         << "If no input is given, the CLI tries to read PD.txt from the current directory.\n";
 }
 
@@ -468,6 +469,7 @@ int main(int argc, char** argv) {
             return interrupted();
         };
         bool json = false;
+        bool show_step_pd = false;
         int reduction_round = -1;
         std::size_t known_crossingless_components = 0;
         std::vector<int> removed_crossings;
@@ -484,6 +486,8 @@ int main(int argc, char** argv) {
             }
             if (arg == "--json") {
                 json = true;
+            } else if (arg == "--show-step-pd") {
+                show_step_pd = true;
             } else if (arg == "--ban-heuristic") {
                 options.ban_heuristic = true;
             } else if (arg == "--verbose") {
@@ -617,6 +621,20 @@ int main(int argc, char** argv) {
                     const std::string label = jobs[i].label;
                     job_options.progress = [label](const std::string& message) {
                         print_progress_log(label + ": " + message);
+                    };
+                }
+                if (show_step_pd) {
+                    const std::string label = jobs[i].label;
+                    job_options.step_pd_output = [label, show_labels](
+                        int round,
+                        const pdcode_simplify::PDCode& step_code) {
+                        if (show_labels) {
+                            std::cout << label << ": ";
+                        }
+                        std::cout << "step_pd_code[" << round << "]: "
+                                  << pdcode_simplify::format_final_pd_code(step_code)
+                                  << '\n';
+                        std::cout.flush();
                     };
                 }
                 const auto result = pdcode_simplify::reduce_pd_code(

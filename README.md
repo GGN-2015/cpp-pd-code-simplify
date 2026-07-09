@@ -27,7 +27,9 @@ the local timestamp, current reduction round, crossing count, and the
 `actual_threads` selected when `--max-thread -1` enters brute-force search.
 Add `--timeout K` to cap each PD-code job at `K` seconds; the default `-1`
 means no timeout. Timed-out jobs still return the best PD code found so far
-and set `timed_out` in the JSON/text result.
+and set `timed_out` in the JSON/text result. Add `--show-step-pd` to print the
+PD code after each applied mid-simplification witness; it writes to stdout and
+is disabled by default.
 
 Create a redistributable package with the CLI, shared library, headers, and
 documentation:

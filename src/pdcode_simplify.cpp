@@ -1836,6 +1836,12 @@ void emit_progress(const SimplifierOptions& options, const std::string& message)
     }
 }
 
+void emit_step_pd(const SimplifierOptions& options, int round, const PDCode& code) {
+    if (options.step_pd_output) {
+        options.step_pd_output(round, code);
+    }
+}
+
 std::string search_mode_for_options(const SimplifierOptions& options) {
     if (options.max_paths == -1 && !options.ban_heuristic) {
         return "heuristic";
@@ -2639,6 +2645,7 @@ ReductionResult reduce_pd_code(
             const MidSimplificationApplyResult applied =
                 apply_simplification_witness(output.code, search, output.crossingless_components);
             ++output.mid_simplification_rounds;
+            emit_step_pd(run_options, round, applied.code);
             output.code = applied.code;
             output.crossingless_components = applied.crossingless_components;
             check_timeout(run_options);

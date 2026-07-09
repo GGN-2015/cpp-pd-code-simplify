@@ -1980,6 +1980,20 @@ def _emit_progress(
         progress(message)
 
 
+def _emit_step_pd(
+    show_step_pd: bool,
+    step_pd_output: Optional[Callable[[int, PDCode], None]],
+    round_index: int,
+    code: PDCode,
+) -> None:
+    if not show_step_pd:
+        return
+    if step_pd_output is not None:
+        step_pd_output(round_index, code)
+        return
+    print(f"step_pd_code[{round_index}]: {format_final_pd_code(code)}", flush=True)
+
+
 def _search_mode(max_paths: int, ban_heuristic: bool) -> str:
     if max_paths == -1 and not ban_heuristic:
         return "heuristic"
@@ -1998,6 +2012,8 @@ def reduce_pd_code(
     timeout: int = -1,
     verbose: bool = False,
     progress: Optional[Callable[[str], None]] = None,
+    show_step_pd: bool = False,
+    step_pd_output: Optional[Callable[[int, PDCode], None]] = None,
     _timeout_deadline: Optional[float] = None,
 ) -> ReductionResult:
     if max_thread < -1 or max_thread == 0:
@@ -2135,6 +2151,7 @@ def reduce_pd_code(
                 output.crossingless_components,
             )
             output.mid_simplification_rounds += 1
+            _emit_step_pd(show_step_pd, step_pd_output, round_index, reduced_code)
             output.code = reduced_code
             output.crossingless_components = reduced_crossingless
             check_timeout(timeout, deadline)
@@ -2291,6 +2308,8 @@ def run_job(
     known_crossingless_components: int = 0,
     removed_crossings: Optional[Sequence[int]] = None,
     verbose: bool = False,
+    show_step_pd: bool = False,
+    step_label: Optional[str] = None,
 ) -> Tuple[
     ReductionResult,
     ComponentAnalysis,
@@ -2317,6 +2336,16 @@ def run_job(
             verbose=verbose,
             progress=lambda message: print(
                 format_progress_log(f"{job.label}: {message}"), file=sys.stderr
+            ),
+            show_step_pd=show_step_pd,
+            step_pd_output=(
+                lambda round_index, step_code: print(
+                    (
+                        f"{step_label}: " if step_label else ""
+                    )
+                    + f"step_pd_code[{round_index}]: {format_final_pd_code(step_code)}",
+                    flush=True,
+                )
             ),
         ),
         input_components,
@@ -2380,6 +2409,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ban-heuristic", action="store_true",
                         help="with --max-paths -1, enumerate all green paths instead of heuristic sampling")
     parser.add_argument("--verbose", action="store_true", help="print progress logs to stderr")
+    parser.add_argument(
+        "--show-step-pd",
+        action="store_true",
+        help="print the PD code after each witness application",
+    )
     parser.add_argument(
         "--reduction-round",
         type=int,
@@ -2472,6 +2506,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     known_crossingless_components=args.known_crossingless_components,
                     removed_crossings=removed_crossings,
                     verbose=args.verbose,
+                    show_step_pd=args.show_step_pd,
+                    step_label=job.label if show_labels else None,
                 )
                 final_components = analyze_components(
                     result.code, result.crossingless_components
@@ -2516,6 +2552,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     known_crossingless_components=args.known_crossingless_components,
                     removed_crossings=removed_crossings,
                     verbose=args.verbose,
+                    show_step_pd=args.show_step_pd,
+                    step_label=job.label if show_labels else None,
                 )
                 print_text_result(result, input_components, after_removal)
                 if result.timed_out:

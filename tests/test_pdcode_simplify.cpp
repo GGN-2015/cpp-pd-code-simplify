@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -287,6 +288,25 @@ void test_same_face_green_path_unknot() {
             "same-face green path unknot should preserve the crossingless component");
 }
 
+void test_step_pd_callback() {
+    const auto code = pdcode_simplify::parse_pd_code(
+        "PD[X[1,5,2,4],X[2,5,3,6],X[6,3,1,4]]");
+    std::vector<std::string> steps;
+    pdcode_simplify::SimplifierOptions options;
+    options.max_threads = 1;
+    options.step_pd_output = [&](int round, const pdcode_simplify::PDCode& step_code) {
+        steps.push_back(
+            std::to_string(round) + ":" + pdcode_simplify::format_final_pd_code(step_code));
+    };
+
+    const auto reduced = pdcode_simplify::reduce_pd_code(code, 0, options, -1);
+    require(reduced.mid_simplification_rounds == 1,
+            "step callback fixture should apply one witness");
+    require(steps.size() == 1, "step callback should run once per applied witness");
+    require(steps.front() == "1:PD[X[2,1,1,2]]",
+            "step callback should receive the PD code immediately after witness application");
+}
+
 }  // namespace
 
 int main() {
@@ -302,6 +322,7 @@ int main() {
         test_r1_random_inflate_then_pre_simplify();
         test_reference_sample();
         test_same_face_green_path_unknot();
+        test_step_pd_callback();
         std::cout << "All tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
