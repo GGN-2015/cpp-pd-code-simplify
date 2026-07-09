@@ -152,6 +152,26 @@ void test_timeout_deadline() {
     require(result.code.size() == trefoil.size(), "timed-out result should keep the current best PD code");
 }
 
+void test_bruteforce_budget_limit() {
+    const auto trefoil = pdcode_simplify::parse_pd_code(
+        "[(1,5,2,4),(3,1,4,6),(5,3,6,2)]");
+    pdcode_simplify::SimplifierOptions options;
+    options.max_paths = -1;
+    options.ban_heuristic = true;
+    options.max_threads = 1;
+    options.bruteforce_budget = 1;
+
+    const auto result = pdcode_simplify::reduce_pd_code(trefoil, 0, options, -1);
+    require(result.resource_limited,
+            "brute-force budget exhaustion should be reported");
+    require(!result.timed_out,
+            "brute-force budget exhaustion should not be reported as a timeout");
+    require(result.tested_green_paths == 1,
+            "brute-force budget should cap checked green paths");
+    require(result.code.size() == trefoil.size(),
+            "resource-limited result should keep the current best PD code");
+}
+
 void test_crossingless_component_count_after_removal() {
     const auto trefoil = pdcode_simplify::parse_pd_code(
         "[(1,5,2,4),(3,1,4,6),(5,3,6,2)]");
@@ -385,6 +405,7 @@ int main() {
         test_verbose_auto_thread_log();
         test_finite_round_uses_brute_fallback();
         test_timeout_deadline();
+        test_bruteforce_budget_limit();
         test_crossingless_component_count_after_removal();
         test_r1_random_inflate_then_pre_simplify();
         test_reference_sample();

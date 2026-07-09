@@ -113,9 +113,33 @@ class PdCodeSimplifyTimeoutError(RuntimeError):
     pass
 
 
+DEFAULT_BRUTEFORCE_BUDGET = 200_000
+
+
 def validate_timeout(timeout: int) -> None:
     if timeout < -1 or timeout == 0:
         raise ValueError("timeout must be -1 or a positive integer")
+
+
+def validate_bruteforce_budget(bruteforce_budget: int) -> None:
+    if bruteforce_budget < -1 or bruteforce_budget == 0:
+        raise ValueError("bruteforce_budget must be -1 or a positive integer")
+
+
+@dataclass
+class BruteForceBudget:
+    limit: int = DEFAULT_BRUTEFORCE_BUDGET
+    used: int = 0
+    exhausted: bool = False
+
+    def take(self) -> bool:
+        if self.limit < 0:
+            return True
+        if self.used >= self.limit:
+            self.exhausted = True
+            return False
+        self.used += 1
+        return True
 
 
 def timeout_deadline(timeout: int, existing: Optional[float] = None) -> Optional[float]:
@@ -203,6 +227,7 @@ class SimplificationResult:
     green_crossings: List[GreenCrossing] = field(default_factory=list)
     tested_red_paths: int = 0
     tested_green_paths: int = 0
+    resource_limited: bool = False
 
     def to_json(
         self,
@@ -225,6 +250,7 @@ class SimplificationResult:
             data["search_components"] = search_components.to_json()
         data["tested_red_paths"] = self.tested_red_paths
         data["tested_green_paths"] = self.tested_green_paths
+        data["resource_limited"] = self.resource_limited
         data["path_search_mode"] = self.path_search_mode
         if self.found:
             data["direction"] = self.direction
@@ -244,6 +270,7 @@ class RedPathSearchOutcome:
     completed: bool = False
     skipped: bool = False
     found: bool = False
+    resource_limited: bool = False
     tested_green_paths: int = 0
     witness: SimplificationResult = field(default_factory=SimplificationResult)
 
@@ -263,6 +290,7 @@ class ReductionResult:
     last_path_search_mode: str = ""
     stopped_by_round_limit: bool = False
     timed_out: bool = False
+    resource_limited: bool = False
 
     def to_json(
         self,
@@ -304,6 +332,7 @@ class ReductionResult:
             "last_path_search_mode": self.last_path_search_mode,
             "stopped_by_round_limit": self.stopped_by_round_limit,
             "timed_out": self.timed_out,
+            "resource_limited": self.resource_limited,
         })
         return data
 
@@ -1373,6 +1402,9 @@ _PARALLEL_RED_LINES: Optional[List[List[Endpoint]]] = None
 _PARALLEL_REQUIRE_APPLICABLE = False
 _PARALLEL_BEST_INDEX: Any = None
 _PARALLEL_BEST_LOCK: Any = None
+_PARALLEL_BRUTE_BUDGET_LIMIT = DEFAULT_BRUTEFORCE_BUDGET
+_PARALLEL_BRUTE_BUDGET_USED: Any = None
+_PARALLEL_BRUTE_BUDGET_LOCK: Any = None
 _PARALLEL_TIMEOUT = -1
 _PARALLEL_TIMEOUT_DEADLINE: Optional[float] = None
 
@@ -1383,6 +1415,9 @@ def _parallel_bruteforce_initializer(
     require_applicable: bool,
     best_index: Any,
     best_lock: Any,
+    budget_limit: int,
+    budget_used: Any,
+    budget_lock: Any,
     timeout: int,
     deadline: Optional[float],
 ) -> None:
@@ -1393,6 +1428,9 @@ def _parallel_bruteforce_initializer(
     global _PARALLEL_REQUIRE_APPLICABLE
     global _PARALLEL_BEST_INDEX
     global _PARALLEL_BEST_LOCK
+    global _PARALLEL_BRUTE_BUDGET_LIMIT
+    global _PARALLEL_BRUTE_BUDGET_USED
+    global _PARALLEL_BRUTE_BUDGET_LOCK
     global _PARALLEL_TIMEOUT
     global _PARALLEL_TIMEOUT_DEADLINE
 
@@ -1405,6 +1443,9 @@ def _parallel_bruteforce_initializer(
     _PARALLEL_REQUIRE_APPLICABLE = require_applicable
     _PARALLEL_BEST_INDEX = best_index
     _PARALLEL_BEST_LOCK = best_lock
+    _PARALLEL_BRUTE_BUDGET_LIMIT = budget_limit
+    _PARALLEL_BRUTE_BUDGET_USED = budget_used
+    _PARALLEL_BRUTE_BUDGET_LOCK = budget_lock
     _PARALLEL_TIMEOUT = timeout
     _PARALLEL_TIMEOUT_DEADLINE = deadline
 
@@ -1419,6 +1460,24 @@ def _parallel_record_found(red_index: int) -> None:
     with _PARALLEL_BEST_LOCK:
         if red_index < _PARALLEL_BEST_INDEX.value:
             _PARALLEL_BEST_INDEX.value = red_index
+
+
+def _parallel_budget_exhausted() -> bool:
+    if _PARALLEL_BRUTE_BUDGET_LIMIT < 0 or _PARALLEL_BRUTE_BUDGET_USED is None:
+        return False
+    return _PARALLEL_BRUTE_BUDGET_USED.value >= _PARALLEL_BRUTE_BUDGET_LIMIT
+
+
+def _parallel_take_budget() -> bool:
+    if _PARALLEL_BRUTE_BUDGET_LIMIT < 0:
+        return True
+    if _PARALLEL_BRUTE_BUDGET_USED is None or _PARALLEL_BRUTE_BUDGET_LOCK is None:
+        return True
+    with _PARALLEL_BRUTE_BUDGET_LOCK:
+        if _PARALLEL_BRUTE_BUDGET_USED.value >= _PARALLEL_BRUTE_BUDGET_LIMIT:
+            return False
+        _PARALLEL_BRUTE_BUDGET_USED.value += 1
+        return True
 
 
 def terminate_process_pool(executor: concurrent.futures.ProcessPoolExecutor) -> None:
@@ -1477,15 +1536,15 @@ def is_planar_pd_code(code: PDCode) -> bool:
     return vertices - edges + faces == 2 * graph_components
 
 
-def collect_simple_paths(
+def visit_simple_paths(
     graph: DualGraph,
     source: int,
     target: int,
     cutoff: int,
-    max_paths: int,
+    visitor: Callable[[List[int]], bool],
     timeout: int = -1,
     _timeout_deadline: Optional[float] = None,
-) -> List[List[int]]:
+) -> bool:
     check_timeout(timeout, _timeout_deadline)
     if (
         source < 0
@@ -1494,27 +1553,26 @@ def collect_simple_paths(
         or target >= len(graph.faces)
         or cutoff <= 0
     ):
-        return []
+        return True
     if source == target:
-        return [[source]]
+        return visitor([source])
 
-    paths: List[List[int]] = []
     visited = [False for _ in graph.faces]
     current_path = [source]
     distance = heuristic_distances_to_target(graph, target, cutoff, timeout, _timeout_deadline)
     visited[source] = True
 
-    def dfs(current: int, current_weight: int) -> None:
+    def dfs(current: int, current_weight: int) -> bool:
         check_timeout(timeout, _timeout_deadline)
         if len(current_path) - 1 >= cutoff:
-            return
+            return True
         if (
             current < 0
             or current >= len(distance)
             or distance[current] >= 10**9
             or current_weight + distance[current] >= cutoff
         ):
-            return
+            return True
         for edge_index in graph.adjacency[current]:
             edge = graph.edges[edge_index]
             nxt = edge.v if edge.u == current else edge.u
@@ -1533,22 +1591,16 @@ def collect_simple_paths(
             current_path.append(nxt)
             visited[nxt] = True
             if nxt == target:
-                paths.append(list(current_path))
-                if max_paths != -1 and len(paths) > max_paths:
-                    visited[nxt] = False
-                    current_path.pop()
-                    return
+                keep_going = visitor(list(current_path))
             else:
-                dfs(nxt, next_weight)
-                if max_paths != -1 and len(paths) > max_paths:
-                    visited[nxt] = False
-                    current_path.pop()
-                    return
+                keep_going = dfs(nxt, next_weight)
             visited[nxt] = False
             current_path.pop()
+            if not keep_going:
+                return False
+        return True
 
-    dfs(source, 0)
-    return paths
+    return dfs(source, 0)
 
 
 def heuristic_distances_to_target(
@@ -1915,6 +1967,9 @@ def search_single_red_path(
     require_applicable: bool,
     path_search_mode: str,
     should_skip: Optional[Callable[[], bool]] = None,
+    bruteforce_budget: Optional[BruteForceBudget] = None,
+    take_budget: Optional[Callable[[], bool]] = None,
+    budget_exhausted: Optional[Callable[[], bool]] = None,
     timeout: int = -1,
     _timeout_deadline: Optional[float] = None,
 ) -> RedPathSearchOutcome:
@@ -1923,6 +1978,13 @@ def search_single_red_path(
     outcome.witness.path_search_mode = path_search_mode
     if should_skip is not None and should_skip():
         outcome.skipped = True
+        return outcome
+    if budget_exhausted is not None:
+        if budget_exhausted():
+            outcome.resource_limited = True
+            return outcome
+    elif bruteforce_budget is not None and bruteforce_budget.exhausted:
+        outcome.resource_limited = True
         return outcome
 
     graph = clone_dual_graph(base_graph)
@@ -1945,31 +2007,26 @@ def search_single_red_path(
         if edge is not None:
             edge.weight = BLOCKED_WEIGHT
 
-    paths: List[List[int]] = []
     cutoff = len(red_path) - 1
-    for source in sources:
-        for destination in destinations:
-            check_timeout(timeout, _timeout_deadline)
-            if should_skip is not None and should_skip():
-                outcome.skipped = True
-                return outcome
-            if max_paths == -1 and not ban_heuristic:
-                found = collect_heuristic_paths(
-                    graph, source, destination, cutoff, timeout, _timeout_deadline
-                )
-            else:
-                found = collect_simple_paths(
-                    graph, source, destination, cutoff, max_paths, timeout, _timeout_deadline
-                )
-            paths.extend(found)
-            if max_paths != -1 and len(paths) > max_paths:
-                break
 
-    for green_path in paths:
+    def take_one_budget() -> bool:
+        if take_budget is not None:
+            return take_budget()
+        if bruteforce_budget is not None:
+            return bruteforce_budget.take()
+        return True
+
+    def test_green_path(green_path: List[int]) -> bool:
         check_timeout(timeout, _timeout_deadline)
+        if should_skip is not None and should_skip():
+            outcome.skipped = True
+            return False
+        if not take_one_budget():
+            outcome.resource_limited = True
+            return False
         outcome.tested_green_paths += 1
         if len(green_path) >= len(red_path):
-            continue
+            return True
         if do_check(
             diagram,
             graph,
@@ -1984,7 +2041,7 @@ def search_single_red_path(
                 outcome.found = True
                 outcome.completed = True
                 outcome.witness.tested_green_paths = outcome.tested_green_paths
-                return outcome
+                return False
             outcome.witness = SimplificationResult(path_search_mode=path_search_mode)
         if do_check(
             diagram,
@@ -2000,8 +2057,44 @@ def search_single_red_path(
                 outcome.found = True
                 outcome.completed = True
                 outcome.witness.tested_green_paths = outcome.tested_green_paths
-                return outcome
+                return False
             outcome.witness = SimplificationResult(path_search_mode=path_search_mode)
+        return True
+
+    for source in sources:
+        for destination in destinations:
+            check_timeout(timeout, _timeout_deadline)
+            if should_skip is not None and should_skip():
+                outcome.skipped = True
+                return outcome
+            if max_paths == -1 and not ban_heuristic:
+                found_paths = collect_heuristic_paths(
+                    graph, source, destination, cutoff, timeout, _timeout_deadline
+                )
+                for green_path in found_paths:
+                    if not test_green_path(green_path):
+                        return outcome
+            else:
+                visited_for_pair = 0
+
+                def visitor(green_path: List[int]) -> bool:
+                    nonlocal visited_for_pair
+                    if max_paths != -1 and visited_for_pair > max_paths:
+                        return False
+                    visited_for_pair += 1
+                    return test_green_path(green_path)
+
+                completed = visit_simple_paths(
+                    graph,
+                    source,
+                    destination,
+                    cutoff,
+                    visitor,
+                    timeout,
+                    _timeout_deadline,
+                )
+                if not completed or outcome.found or outcome.skipped or outcome.resource_limited:
+                    return outcome
 
     outcome.completed = True
     outcome.witness.tested_green_paths = outcome.tested_green_paths
@@ -2019,6 +2112,8 @@ def _parallel_bruteforce_worker(red_index: int) -> RedPathSearchOutcome:
         raise RuntimeError("Parallel brute-force worker was not initialized")
     if _parallel_should_skip(red_index):
         return RedPathSearchOutcome(skipped=True)
+    if _parallel_budget_exhausted():
+        return RedPathSearchOutcome(resource_limited=True)
     outcome = search_single_red_path(
         _PARALLEL_CODE,
         _PARALLEL_DIAGRAM,
@@ -2029,6 +2124,8 @@ def _parallel_bruteforce_worker(red_index: int) -> RedPathSearchOutcome:
         require_applicable=_PARALLEL_REQUIRE_APPLICABLE,
         path_search_mode="bruteforce",
         should_skip=lambda: _parallel_should_skip(red_index),
+        take_budget=_parallel_take_budget,
+        budget_exhausted=_parallel_budget_exhausted,
         timeout=_PARALLEL_TIMEOUT,
         _timeout_deadline=_PARALLEL_TIMEOUT_DEADLINE,
     )
@@ -2049,11 +2146,24 @@ def merge_red_path_outcomes(
     limit = first_found if first_found >= 0 else len(outcomes) - 1
     for index in range(limit + 1):
         outcome = outcomes[index]
-        if not outcome.completed and not outcome.found:
+        if outcome.resource_limited:
+            result.resource_limited = True
+        if (
+            not outcome.completed
+            and not outcome.found
+            and not outcome.resource_limited
+            and not result.resource_limited
+        ):
             raise RuntimeError(
                 f"Parallel brute-force search did not complete red path {index}"
             )
-        result.tested_red_paths += 1
+        if (
+            outcome.completed
+            or outcome.found
+            or outcome.resource_limited
+            or outcome.tested_green_paths > 0
+        ):
+            result.tested_red_paths += 1
         result.tested_green_paths += outcome.tested_green_paths
 
     if first_found >= 0:
@@ -2062,6 +2172,9 @@ def merge_red_path_outcomes(
         witness.tested_red_paths = first_found + 1
         witness.tested_green_paths = sum(
             outcomes[index].tested_green_paths for index in range(first_found + 1)
+        )
+        witness.resource_limited = any(
+            outcomes[index].resource_limited for index in range(first_found + 1)
         )
         return witness
     return result
@@ -2072,6 +2185,7 @@ def find_simplification_parallel_bruteforce(
     red_lines: List[List[Endpoint]],
     require_applicable: bool,
     worker_count: int,
+    bruteforce_budget: int = DEFAULT_BRUTEFORCE_BUDGET,
     timeout: int = -1,
     _timeout_deadline: Optional[float] = None,
 ) -> SimplificationResult:
@@ -2084,6 +2198,8 @@ def find_simplification_parallel_bruteforce(
     with multiprocessing.Manager() as manager:
         best_index = manager.Value("i", len(red_lines))
         best_lock = manager.Lock()
+        budget_used = manager.Value("q", 0)
+        budget_lock = manager.Lock()
         executor: Optional[concurrent.futures.ProcessPoolExecutor] = None
         try:
             executor = concurrent.futures.ProcessPoolExecutor(
@@ -2095,6 +2211,9 @@ def find_simplification_parallel_bruteforce(
                     require_applicable,
                     best_index,
                     best_lock,
+                    bruteforce_budget,
+                    budget_used,
+                    budget_lock,
                     timeout,
                     _timeout_deadline,
                 ),
@@ -2130,6 +2249,7 @@ def find_simplification(
     ban_heuristic: bool = False,
     require_applicable: bool = False,
     max_thread: int = -1,
+    bruteforce_budget: int = DEFAULT_BRUTEFORCE_BUDGET,
     verbose: bool = False,
     progress: Optional[Callable[[str], None]] = None,
     timeout: int = -1,
@@ -2137,6 +2257,7 @@ def find_simplification(
 ) -> SimplificationResult:
     if max_thread < -1 or max_thread == 0:
         raise ValueError("max_thread must be -1 or a positive integer")
+    validate_bruteforce_budget(bruteforce_budget)
     deadline = timeout_deadline(timeout, _timeout_deadline)
     check_timeout(timeout, deadline)
     result = SimplificationResult()
@@ -2160,7 +2281,8 @@ def find_simplification(
                 progress,
                 (
                     f"bruteforce_threads max_thread=-1 "
-                    f"actual_threads={worker_count} red_paths={len(red_lines)}"
+                    f"actual_threads={worker_count} red_paths={len(red_lines)} "
+                    f"bruteforce_budget={bruteforce_budget}"
                 ),
             )
         if worker_count > 1:
@@ -2169,10 +2291,16 @@ def find_simplification(
                 red_lines,
                 require_applicable,
                 worker_count,
+                bruteforce_budget,
                 timeout,
                 deadline,
             )
 
+    brute_budget = (
+        BruteForceBudget(bruteforce_budget)
+        if max_paths == -1 and ban_heuristic
+        else None
+    )
     for red_path in red_lines:
         check_timeout(timeout, deadline)
         result.tested_red_paths += 1
@@ -2185,15 +2313,20 @@ def find_simplification(
             ban_heuristic,
             require_applicable,
             result.path_search_mode,
+            bruteforce_budget=brute_budget,
             timeout=timeout,
             _timeout_deadline=deadline,
         )
         result.tested_green_paths += outcome.tested_green_paths
+        result.resource_limited = result.resource_limited or outcome.resource_limited
+        if outcome.resource_limited:
+            return result
         if outcome.found:
             witness = outcome.witness
             witness.path_search_mode = result.path_search_mode
             witness.tested_red_paths = result.tested_red_paths
             witness.tested_green_paths = result.tested_green_paths
+            witness.resource_limited = outcome.resource_limited
             return witness
 
     return result
@@ -2424,6 +2557,7 @@ def reduce_pd_code(
     ban_heuristic: bool = False,
     reduction_round: int = -1,
     max_thread: int = -1,
+    bruteforce_budget: int = DEFAULT_BRUTEFORCE_BUDGET,
     timeout: int = -1,
     verbose: bool = False,
     progress: Optional[Callable[[str], None]] = None,
@@ -2433,6 +2567,7 @@ def reduce_pd_code(
 ) -> ReductionResult:
     if max_thread < -1 or max_thread == 0:
         raise ValueError("max_thread must be -1 or a positive integer")
+    validate_bruteforce_budget(bruteforce_budget)
     deadline = timeout_deadline(timeout, _timeout_deadline)
     output = ReductionResult(
         code=[list(crossing) for crossing in code],
@@ -2447,7 +2582,8 @@ def reduce_pd_code(
                 f"start input_crossings={len(code)} "
                 f"known_crossingless_components={known_crossingless_components} "
                 f"reduction_round={reduction_round} max_paths={max_paths} "
-                f"max_thread={max_thread} timeout={timeout} "
+                f"max_thread={max_thread} bruteforce_budget={bruteforce_budget} "
+                f"timeout={timeout} "
                 f"heuristic={'off' if ban_heuristic else 'on'}"
             ),
         )
@@ -2533,6 +2669,7 @@ def reduce_pd_code(
                 ban_heuristic=ban_heuristic,
                 require_applicable=True,
                 max_thread=max_thread,
+                bruteforce_budget=bruteforce_budget,
                 verbose=verbose,
                 progress=progress,
                 timeout=timeout,
@@ -2541,6 +2678,7 @@ def reduce_pd_code(
             output.tested_red_paths += search.tested_red_paths
             output.tested_green_paths += search.tested_green_paths
             output.last_path_search_mode = search.path_search_mode
+            output.resource_limited = output.resource_limited or search.resource_limited
             _emit_progress(
                 verbose,
                 progress,
@@ -2548,7 +2686,8 @@ def reduce_pd_code(
                     f"round {round_index} search_done found={'yes' if search.found else 'no'} "
                     f"mode={search.path_search_mode} "
                     f"tested_red={search.tested_red_paths} "
-                    f"tested_green={search.tested_green_paths}"
+                    f"tested_green={search.tested_green_paths} "
+                    f"resource_limited={'yes' if search.resource_limited else 'no'}"
                 ),
             )
 
@@ -2563,7 +2702,8 @@ def reduce_pd_code(
                     progress,
                     (
                         f"round {round_index} brute_fallback_start "
-                        f"crossings={len(output.code)} max_thread={max_thread}"
+                        f"crossings={len(output.code)} max_thread={max_thread} "
+                        f"bruteforce_budget={bruteforce_budget}"
                     ),
                 )
                 brute = find_simplification(
@@ -2572,6 +2712,7 @@ def reduce_pd_code(
                     ban_heuristic=True,
                     require_applicable=True,
                     max_thread=max_thread,
+                    bruteforce_budget=bruteforce_budget,
                     verbose=verbose,
                     progress=progress,
                     timeout=timeout,
@@ -2580,6 +2721,7 @@ def reduce_pd_code(
                 output.tested_red_paths += brute.tested_red_paths
                 output.tested_green_paths += brute.tested_green_paths
                 output.last_path_search_mode = brute.path_search_mode
+                output.resource_limited = output.resource_limited or brute.resource_limited
                 _emit_progress(
                     verbose,
                     progress,
@@ -2587,7 +2729,8 @@ def reduce_pd_code(
                         f"round {round_index} brute_fallback_done "
                         f"found={'yes' if brute.found else 'no'} "
                         f"tested_red={brute.tested_red_paths} "
-                        f"tested_green={brute.tested_green_paths}"
+                        f"tested_green={brute.tested_green_paths} "
+                        f"resource_limited={'yes' if brute.resource_limited else 'no'}"
                     ),
                 )
                 if brute.found:
@@ -2595,6 +2738,19 @@ def reduce_pd_code(
                     search = brute
 
             if not search.found:
+                if output.resource_limited:
+                    _emit_progress(
+                        verbose,
+                        progress,
+                        (
+                            f"round {round_index} stop_resource_limited "
+                            f"crossings={len(output.code)} "
+                            f"tested_red_total={output.tested_red_paths} "
+                            f"tested_green_total={output.tested_green_paths}"
+                        ),
+                    )
+                    break
+
                 _emit_progress(
                     verbose,
                     progress,
@@ -2688,6 +2844,7 @@ def reduce_pd_code(
 
     output.stopped_by_round_limit = (
         not output.timed_out
+        and not output.resource_limited
         and reduction_round >= 0
         and output.mid_simplification_rounds >= reduction_round
     )
@@ -2702,7 +2859,8 @@ def reduce_pd_code(
             f"r2_moves={output.reidemeister_ii_moves} "
             f"r3_moves={output.reidemeister_iii_moves} "
             f"stopped_by_round_limit={'yes' if output.stopped_by_round_limit else 'no'} "
-            f"timed_out={'yes' if output.timed_out else 'no'}"
+            f"timed_out={'yes' if output.timed_out else 'no'} "
+            f"resource_limited={'yes' if output.resource_limited else 'no'}"
         ),
     )
     return output
@@ -2808,6 +2966,7 @@ def run_job(
     ban_heuristic: bool = False,
     reduction_round: int = -1,
     max_thread: int = -1,
+    bruteforce_budget: int = DEFAULT_BRUTEFORCE_BUDGET,
     timeout: int = -1,
     known_crossingless_components: int = 0,
     removed_crossings: Optional[Sequence[int]] = None,
@@ -2836,6 +2995,7 @@ def run_job(
             ban_heuristic=ban_heuristic,
             reduction_round=reduction_round,
             max_thread=max_thread,
+            bruteforce_budget=bruteforce_budget,
             timeout=timeout,
             verbose=verbose,
             progress=lambda message: print(
@@ -2900,6 +3060,7 @@ def print_text_result(
     print(f"last_path_search_mode: {result.last_path_search_mode}")
     print(f"stopped_by_round_limit: {'yes' if result.stopped_by_round_limit else 'no'}")
     print(f"timed_out: {'yes' if result.timed_out else 'no'}")
+    print(f"resource_limited: {'yes' if result.resource_limited else 'no'}")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -2918,6 +3079,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=-1,
         help="maximum brute-force worker processes, or -1 to choose automatically",
+    )
+    parser.add_argument(
+        "--bruteforce-budget",
+        type=int,
+        default=DEFAULT_BRUTEFORCE_BUDGET,
+        help="maximum brute-force green-path checks per PD code, or -1 for no cap",
     )
     parser.add_argument("--ban-heuristic", action="store_true",
                         help="with --max-paths -1, enumerate all green paths instead of heuristic sampling")
@@ -3012,6 +3179,8 @@ def main_impl(argv: Sequence[str]) -> int:
         parser.error("--reduction-round must be -1 or a non-negative integer")
     if args.max_thread < -1 or args.max_thread == 0:
         parser.error("--max-thread must be -1 or a positive integer")
+    if args.bruteforce_budget < -1 or args.bruteforce_budget == 0:
+        parser.error("--bruteforce-budget must be -1 or a positive integer")
     if args.timeout < -1 or args.timeout == 0:
         parser.error("--timeout must be -1 or a positive integer")
     jobs = collect_jobs(args)
@@ -3030,6 +3199,7 @@ def main_impl(argv: Sequence[str]) -> int:
                     ban_heuristic=args.ban_heuristic,
                     reduction_round=args.reduction_round,
                     max_thread=args.max_thread,
+                    bruteforce_budget=args.bruteforce_budget,
                     timeout=args.timeout,
                     known_crossingless_components=args.known_crossingless_components,
                     removed_crossings=removed_crossings,
@@ -3048,7 +3218,7 @@ def main_impl(argv: Sequence[str]) -> int:
                         label=job.label if show_labels else None,
                     )
                 )
-                if result.timed_out:
+                if result.timed_out or result.resource_limited:
                     had_error = True
             except KeyboardInterrupt:
                 had_error = True
@@ -3076,6 +3246,7 @@ def main_impl(argv: Sequence[str]) -> int:
                     ban_heuristic=args.ban_heuristic,
                     reduction_round=args.reduction_round,
                     max_thread=args.max_thread,
+                    bruteforce_budget=args.bruteforce_budget,
                     timeout=args.timeout,
                     known_crossingless_components=args.known_crossingless_components,
                     removed_crossings=removed_crossings,
@@ -3084,7 +3255,7 @@ def main_impl(argv: Sequence[str]) -> int:
                     step_label=job.label if show_labels else None,
                 )
                 print_text_result(result, input_components, after_removal)
-                if result.timed_out:
+                if result.timed_out or result.resource_limited:
                     had_error = True
             except KeyboardInterrupt:
                 had_error = True

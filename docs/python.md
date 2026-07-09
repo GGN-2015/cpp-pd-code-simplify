@@ -35,8 +35,12 @@ returns to heuristic mode. Every generated PD code is canonicalized
 immediately after it is produced, including after each local cleanup deletion
 and after every applied witness. Use `--timeout K` to cap each PD-code job at
 `K` seconds; the default `-1` has no timeout. A timed-out job returns the best
-PD code found so far and sets `timed_out` in JSON/text output. Use `--verbose`
-to print timestamped progress logs to stderr. Verbose log lines use local wall-clock time in
+PD code found so far and sets `timed_out` in JSON/text output. Brute-force
+green-path enumeration is streamed rather than stored in one large list; use
+`--bruteforce-budget N` to cap brute-force green-path checks per PD code. The
+default is `200000`, and `-1` disables that cap. A budget stop returns the
+current best PD code and sets `resource_limited`. Use `--verbose` to print
+timestamped progress logs to stderr. Verbose log lines use local wall-clock time in
 `YYYY-MM-DD HH:MM:SS` format. When `--max-thread -1` reaches a brute-force
 search phase, verbose logs also include `actual_threads`, the worker count
 selected for that phase. `Ctrl+C` cancels active multiprocessing workers and
@@ -77,6 +81,8 @@ when presenting the final PD code to users. The plain `format_pd_code`
 function preserves the internal tuple order and labels.
 If `reduce_pd_code(..., timeout=K)` exceeds its deadline, it returns the
 current best result with `result.timed_out == True`.
+If `reduce_pd_code(..., bruteforce_budget=N)` exhausts its brute-force budget,
+it returns the current best result with `result.resource_limited == True`.
 Pass `show_step_pd=True` to `reduce_pd_code` to print each post-witness PD
 code, or pass `step_pd_output=callable` to receive `(round_index, code)` in
 Python code.

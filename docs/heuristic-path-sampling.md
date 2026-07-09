@@ -9,9 +9,9 @@ The simplifier has three green-path search modes:
 
 | Setting | Mode | Meaning |
 | --- | --- | --- |
-| `max_paths != -1` | `bounded` | Use the original depth-first path collector and stop after the configured cap. |
+| `max_paths != -1` | `bounded` | Use depth-first green-path ordering and stop after the configured cap. |
 | `max_paths == -1` | `heuristic` | Use deterministic priority sampling with fixed budgets. This is the default. |
-| `max_paths == -1` plus `--ban-heuristic` | `bruteforce` | Enumerate all eligible simple green paths for each red path. |
+| `max_paths == -1` plus `--ban-heuristic` | `bruteforce` | Stream all eligible simple green paths for each red path, unless the brute-force budget is exhausted. |
 
 The command-line JSON field `last_path_search_mode` records the last search
 mode used by the reduction loop. The Python prototype and the C++
@@ -29,6 +29,12 @@ ordering.
 The default `max_paths=-1` mode therefore does not mean "pick a hidden cap".
 It switches to a separate deterministic sampling strategy that tries to spend
 work on paths that are more likely to pass the disk-consistency validator.
+
+Brute-force mode is complete only when it is allowed to finish. The
+implementation uses streaming DFS and does not cache the full path set, but it
+also has a separate safety budget: `--bruteforce-budget 200000` by default,
+or `--bruteforce-budget -1` for no budget. Budget exhaustion returns the
+current best PD code with `resource_limited=true`.
 
 ## Scoring
 
@@ -98,5 +104,6 @@ by brute-force mode.
 
 Therefore a witness reported by heuristic mode is sound. The heuristic is not
 complete: it can miss a witness that brute-force mode would find if the witness
-falls outside the sampled frontier. Use `--ban-heuristic --max-paths -1` when
-complete enumeration is required for a manageable input.
+falls outside the sampled frontier. Use
+`--ban-heuristic --max-paths -1 --bruteforce-budget -1` when complete
+enumeration is required for a manageable input.

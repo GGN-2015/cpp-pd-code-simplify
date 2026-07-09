@@ -53,6 +53,7 @@ struct SimplifierOptions {
     int max_paths = -1;
     int max_threads = -1;
     int timeout_seconds = -1;
+    long long bruteforce_budget = 200000;
     bool has_timeout_deadline = false;
     std::chrono::steady_clock::time_point timeout_deadline{};
     bool ban_heuristic = false;
@@ -110,6 +111,7 @@ struct SimplificationResult {
     std::vector<GreenCrossing> green_crossings;
     std::size_t tested_red_paths = 0;
     std::size_t tested_green_paths = 0;
+    bool resource_limited = false;
 };
 
 struct MidSimplificationApplyResult {
@@ -131,6 +133,7 @@ struct ReductionResult {
     std::string last_path_search_mode;
     bool stopped_by_round_limit = false;
     bool timed_out = false;
+    bool resource_limited = false;
 };
 
 PDCODE_SIMPLIFY_API PDCode parse_pd_code(const std::string& text);

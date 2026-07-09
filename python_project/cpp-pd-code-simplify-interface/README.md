@@ -53,7 +53,11 @@ mid-simplification rounds; the default `-1` runs until stable. Use
 `timeout=K` to cap a call at `K` seconds; the default `-1` has no timeout. Use
 `verbose=True` to forward timestamped C++ progress logs to stderr. If a call
 times out, the returned dictionary still contains the best PD code found so far
-and sets `timed_out` to `True`. Verbose log lines use local wall-clock time in
+and sets `timed_out` to `True`. Brute-force green-path enumeration is streamed
+by the C++ backend; pass `bruteforce_budget=N` to cap brute-force green-path
+checks per PD code. The default is `200000`, and `-1` disables that cap. If the
+budget is exhausted, the returned dictionary still contains the current best PD
+code and sets `resource_limited` to `True`. Verbose log lines use local wall-clock time in
 `YYYY-MM-DD HH:MM:SS` format. When `max_thread=-1` reaches a brute-force search
 phase, verbose logs also include `actual_threads`, the worker count selected by
 the C++ backend for that phase. The backend call runs in a helper process, so

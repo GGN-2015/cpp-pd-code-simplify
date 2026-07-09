@@ -100,13 +100,16 @@ dual path: the green arc stays inside one complementary region, including the
 unbounded exterior region when that is the shared face.
 
 When `max_paths` is not `-1`, the implementation uses the bounded depth-first
-collector. When `max_paths` is `-1`, the default collector is the shared
+ordering. When `max_paths` is `-1`, the default search is the shared
 C++/Python deterministic heuristic described in
 [Heuristic Path Sampling](heuristic-path-sampling.md). Passing
 `--ban-heuristic` with `max_paths=-1` restores exhaustive simple-path
-enumeration for the current red path. The exhaustive collector is still exact,
-but it prunes branches whose current weight plus the shortest possible
-remaining dual-graph distance is already too large to beat the red path.
+enumeration for the current red path. Exhaustive enumeration is streaming:
+each green path is passed to the validator immediately instead of being stored
+in one large path list. This is still exact when the brute-force budget is not
+exhausted, and it prunes branches whose current weight plus the shortest
+possible remaining dual-graph distance is already too large to beat the red
+path.
 
 ## Green Path Validation
 
@@ -171,6 +174,14 @@ brute-force pass from the already-canonical current diagram. If brute force
 finds a witness, that witness is applied, canonicalized, and the loop continues
 in heuristic mode. If brute force also fails, the larger deterministic RIII
 failover described below is tried before the diagram is reported as final.
+
+Brute-force search has a separate resource guard, `bruteforce_budget`, exposed
+as `--bruteforce-budget` in the CLIs. The default budget is `200000`
+green-path checks per PD-code job; `-1` disables the guard. If the budget is
+exhausted, the simplifier stops the current job, returns the best PD code known
+so far, and sets `resource_limited`. This is a safety result rather than a
+stability proof: it means the implementation deliberately stopped before
+finishing the brute-force proof attempt.
 
 ## Deterministic RIII Failover
 
@@ -250,10 +261,11 @@ For a fixed red path, any valid simplifying disk must have its other
 boundary arc in the complement of the red interior. Assigning large weights
 to interior red dual edges excludes paths that cross through that boundary.
 In brute-force mode, the simple-path search over the dual graph therefore
-enumerates exactly the eligible green arcs; shortest-distance pruning only
-removes branches that cannot possibly satisfy the strict weight cutoff. In
-bounded and heuristic modes, the search is intentionally incomplete, but every
-candidate that reaches the validator is checked by the same
+enumerates exactly the eligible green arcs when the resource budget is not
+exhausted; shortest-distance pruning only removes branches that cannot possibly
+satisfy the strict weight cutoff. In bounded and heuristic modes, and in a
+resource-limited brute-force run, the search is intentionally incomplete, but
+every candidate that reaches the validator is checked by the same
 crossing-consistency rules.
 
 The validation step is sound because it checks the local crossing

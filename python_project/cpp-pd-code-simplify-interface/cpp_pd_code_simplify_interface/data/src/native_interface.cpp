@@ -171,7 +171,8 @@ std::string result_to_json(
     out << "\"last_path_search_mode\":\"" << json_escape(result.last_path_search_mode) << "\",";
     out << "\"stopped_by_round_limit\":"
         << (result.stopped_by_round_limit ? "true" : "false") << ",";
-    out << "\"timed_out\":" << (result.timed_out ? "true" : "false");
+    out << "\"timed_out\":" << (result.timed_out ? "true" : "false") << ",";
+    out << "\"resource_limited\":" << (result.resource_limited ? "true" : "false");
     out << "}";
     return out.str();
 }
@@ -198,6 +199,7 @@ char* pdcode_simplify_run_json(
     int ban_heuristic,
     int reduction_round,
     int max_thread,
+    long long bruteforce_budget,
     int timeout_seconds,
     int verbose,
     int show_step_pd,
@@ -234,6 +236,7 @@ char* pdcode_simplify_run_json(
         pdcode_simplify::SimplifierOptions options;
         options.max_paths = max_paths;
         options.max_threads = max_thread;
+        options.bruteforce_budget = bruteforce_budget;
         options.timeout_seconds = timeout_seconds;
         options.ban_heuristic = ban_heuristic != 0;
         options.verbose = verbose != 0;

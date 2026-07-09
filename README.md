@@ -27,10 +27,14 @@ the local timestamp, current reduction round, crossing count, and the
 `actual_threads` selected when `--max-thread -1` enters brute-force search.
 Add `--timeout K` to cap each PD-code job at `K` seconds; the default `-1`
 means no timeout. Timed-out jobs still return the best PD code found so far
-and set `timed_out` in the JSON/text result. Add `--show-step-pd` to print the
-PD code after each applied mid-simplification witness; it writes to stdout and
-is disabled by default. Add `--log-file FILEPATH` to tee everything written to
-stdout and stderr into a flushed backup log file.
+and set `timed_out` in the JSON/text result. Brute-force green-path search is
+streamed instead of cached; `--bruteforce-budget N` caps brute-force green-path
+checks per PD code, defaulting to `200000`, and `-1` disables that cap. A
+budget stop still returns the current best PD code and sets
+`resource_limited`. Add `--show-step-pd` to print the PD code after each
+applied mid-simplification witness; it writes to stdout and is disabled by
+default. Add `--log-file FILEPATH` to tee everything written to stdout and
+stderr into a flushed backup log file.
 
 Create a redistributable package with the CLI, shared library, headers, and
 documentation:
@@ -105,11 +109,12 @@ Zip-random large-case benchmark:
 
 This local run uses the deterministic benchmark set documented in
 [Benchmarking](docs/benchmarking.md). The lightweight suite is measured with
-`--max-paths -1 --ban-heuristic --reduction-round -1 --max-thread 16`. The
-large zip-random throughput chart uses one hundred active zip-random cases
-with `--max-paths -1 --reduction-round -1 --max-thread 16`; the benchmark
-checks C++ CLI, Python C++ interface, and Python outputs for exact JSON
-agreement in the same batch-mode run that measures time and peak RSS.
+`--max-paths -1 --ban-heuristic --reduction-round -1 --max-thread 16
+--bruteforce-budget -1`. The large zip-random throughput chart uses one
+hundred active zip-random cases with `--max-paths -1 --reduction-round -1
+--max-thread 16 --bruteforce-budget 200000`; the benchmark checks C++ CLI,
+Python C++ interface, and Python outputs for exact JSON agreement in the same
+batch-mode run that measures time and peak RSS.
 
 ## Documentation
 

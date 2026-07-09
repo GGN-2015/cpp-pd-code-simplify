@@ -69,6 +69,7 @@ python tools/package.py build
   --ban-heuristic ^
   --reduction-round -1 ^
   --max-thread 16 ^
+  --bruteforce-budget -1 ^
   --interface-cxx C:\path\to\g++.exe ^
   --plot docs\assets\benchmark_original_cpp_python.png ^
   --summary-csv docs\assets\benchmark_original_summary.csv ^
@@ -85,6 +86,7 @@ Run the zip-random large-case suite separately:
   --max-paths -1 ^
   --reduction-round -1 ^
   --max-thread 16 ^
+  --bruteforce-budget 200000 ^
   --interface-cxx C:\path\to\g++.exe ^
   --plot docs\assets\benchmark_random_cpp_python.png ^
   --summary-csv docs\assets\benchmark_random_summary.csv ^
@@ -101,13 +103,16 @@ chart reports normal cached `ctypes` calls rather than first-use compilation
 time.
 
 The original lightweight suite is run with `--max-paths -1 --ban-heuristic`
-and `--reduction-round -1`, which means complete green-path enumeration after
+and `--reduction-round -1`. It also uses `--bruteforce-budget -1` because the
+lightweight inputs are small enough for complete green-path enumeration after
 preprocessing and iteration until stable. The large zip-random suite is run
-with `--max-paths -1 --reduction-round -1`, which means deterministic
-heuristic green-path sampling plus the brute-force fallback used to prove
-terminal stability. Full terminal brute-force stability proofs on these
-120-150 crossing diagrams can dominate runtime; use `--verbose` to inspect
-the exact round where a run is spending time.
+with `--max-paths -1 --reduction-round -1 --bruteforce-budget 200000`, which
+means deterministic heuristic green-path sampling plus a resource-guarded
+brute-force fallback. If that guard is exhausted, the job returns the current
+best PD code with `resource_limited=true` instead of attempting an unbounded
+terminal stability proof. Full terminal brute-force proofs on these 120-150
+crossing diagrams can dominate runtime; use `--verbose` to inspect the exact
+round where a run is spending time.
 
 Each measurement repeat writes the selected cases to one temporary multi-line
 PD-code file, then starts each engine once to process the whole file. The same
@@ -125,8 +130,10 @@ in Python, while the Python C++ interface reuses the C++ dynamic library.
 The committed charts were generated on the local Windows development machine
 with a local 64-bit MinGW `g++ -O3 -DNDEBUG` C++ executable. The original
 lightweight suite uses `max_paths=-1`, heuristic disabled, and
-`reduction_round=-1`. The zip-random suite uses `max_paths=-1`, heuristic
-enabled, `reduction_round=-1`, `max_thread=16`, and one hundred active large cases.
+`reduction_round=-1`; it is safe to use `bruteforce_budget=-1` on that suite.
+The zip-random suite uses `max_paths=-1`, heuristic enabled,
+`reduction_round=-1`, `max_thread=16`, `bruteforce_budget=200000`, and one
+hundred active large cases.
 Each suite was measured with one repeat.
 
 Original lightweight suite:

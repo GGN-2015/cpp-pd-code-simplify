@@ -37,6 +37,7 @@ CSV_FIELDS = [
     "return_code",
     "status",
     "timed_out",
+    "resource_limited",
     "final_crossings",
     "final_pd_code",
     "mid_simplification_rounds",
@@ -135,6 +136,7 @@ def run_one(
     max_paths: int,
     reduction_round: int,
     max_thread: int,
+    bruteforce_budget: int,
     timeout_seconds: float,
 ) -> Mapping[str, object]:
     command = [
@@ -148,6 +150,8 @@ def run_one(
         str(reduction_round),
         "--max-thread",
         str(max_thread),
+        "--bruteforce-budget",
+        str(bruteforce_budget),
         "--timeout",
         str(int(timeout_seconds) if timeout_seconds > 0 else -1),
     ]
@@ -180,6 +184,7 @@ def run_one(
         "return_code": proc.returncode,
         "status": "ok" if proc.returncode == 0 else "error",
         "timed_out": False,
+        "resource_limited": False,
         "error": "",
     }
     try:
@@ -193,8 +198,13 @@ def run_one(
             row["status"] = "timeout"
             row["timed_out"] = True
             row["error"] = f"timed out after {timeout_seconds} seconds"
+        elif payload.get("resource_limited"):
+            row["status"] = "resource_limited"
+            row["resource_limited"] = True
+            row["error"] = "brute-force resource budget exhausted"
         for key in [
             "timed_out",
+            "resource_limited",
             "final_crossings",
             "final_pd_code",
             "mid_simplification_rounds",
@@ -338,8 +348,8 @@ def write_markdown(
         f"- Sample size: `{args.sample_size}` PD-code files.",
         f"- Random seed: `{args.seed}`.",
         f"- C++ executable: `{display_path(args.executable)}`.",
-        f"- Runtime options: `--max-paths {args.max_paths} --reduction-round {args.reduction_round} --max-thread {args.max_thread}`.",
-        f"- Per-case timeout: `{args.timeout_seconds:g}` seconds. Timed-out or errored cases are counted as failures and excluded from the scatter plot.",
+        f"- Runtime options: `--max-paths {args.max_paths} --reduction-round {args.reduction_round} --max-thread {args.max_thread} --bruteforce-budget {args.bruteforce_budget}`.",
+        f"- Per-case timeout: `{args.timeout_seconds:g}` seconds. Timed-out, resource-limited, or errored cases are counted as failures and excluded from the scatter plot.",
         "- Each point is one C++ CLI invocation, so the time includes process startup, parsing, preprocessing, simplification, and final JSON formatting.",
         f"- Generated at local time `{now}` on `{platform.platform()}` with Python `{platform.python_version()}`.",
         "",
@@ -351,7 +361,7 @@ def write_markdown(
         "| --- | ---: |",
         f"| Sampled cases | {summary.get('sample_count', 0)} |",
         f"| Completed cases | {summary.get('completed_count', 0)} |",
-        f"| Error or timeout cases | {summary.get('error_count', 0)} |",
+        f"| Failed cases | {summary.get('error_count', 0)} |",
         f"| Failure rate | {float(summary.get('failure_rate_percent', 0.0)):.1f}% |",
         f"| Crossing count range | {summary.get('min_crossings', '')} to {summary.get('max_crossings', '')} |",
         f"| Median crossing count | {summary.get('median_crossings', '')} |",
@@ -379,6 +389,7 @@ def build_payload(rows: Sequence[Mapping[str, object]], args: argparse.Namespace
             "max_paths": args.max_paths,
             "reduction_round": args.reduction_round,
             "max_thread": args.max_thread,
+            "bruteforce_budget": args.bruteforce_budget,
             "timeout_seconds": args.timeout_seconds,
             "generated_at_local": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "platform": platform.platform(),
@@ -398,6 +409,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-paths", type=int, default=-1)
     parser.add_argument("--reduction-round", type=int, default=-1)
     parser.add_argument("--max-thread", type=int, default=16)
+    parser.add_argument("--bruteforce-budget", type=int, default=200000)
     parser.add_argument(
         "--timeout-seconds",
         type=float,
@@ -451,6 +463,7 @@ def main() -> int:
                 args.max_paths,
                 args.reduction_round,
                 args.max_thread,
+                args.bruteforce_budget,
                 args.timeout_seconds,
             )
         )

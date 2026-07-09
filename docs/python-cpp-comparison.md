@@ -24,11 +24,12 @@ true R2-bigon removal, then nugatory-crossing removal.
   --max-paths -1 ^
   --ban-heuristic ^
   --reduction-round -1 ^
-  --max-thread 16
+  --max-thread 16 ^
+  --bruteforce-budget -1
 ```
 
-To compare the one hundred active zip-random large cases with heuristic green-path
-sampling and strict terminal stability:
+To compare the one hundred active zip-random large cases with heuristic
+green-path sampling and the default brute-force safety budget:
 
 ```sh
 .\.venv\Scripts\python tools\compare_cpp_python.py ^
@@ -37,7 +38,8 @@ sampling and strict terminal stability:
   --include-interface ^
   --max-paths -1 ^
   --reduction-round -1 ^
-  --max-thread 16
+  --max-thread 16 ^
+  --bruteforce-budget 200000
 ```
 
 On Linux and macOS, use `.venv/bin/python` instead of
@@ -45,8 +47,9 @@ On Linux and macOS, use `.venv/bin/python` instead of
 
 Return code `0` from either simplifier means every item was processed
 successfully, including inputs that are already stable. Return code `2` means
-at least one item reported an error. Batch mode keeps going after item-level
-errors and reports them in JSON so a bad PD code does not prevent later inputs
+at least one item reported an error, timed out, or exhausted its brute-force
+resource budget. Batch mode keeps going after item-level failures and reports
+them in JSON so a bad or too-expensive PD code does not prevent later inputs
 from being checked.
 
 ## Benchmarking

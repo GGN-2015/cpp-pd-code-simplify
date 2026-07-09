@@ -107,6 +107,7 @@ def run_cpp_batch(
     ban_heuristic: bool,
     reduction_round: int,
     max_thread: int,
+    bruteforce_budget: int,
     verbose: bool,
 ) -> List[Dict[str, object]]:
     command = [
@@ -120,6 +121,8 @@ def run_cpp_batch(
         str(reduction_round),
         "--max-thread",
         str(max_thread),
+        "--bruteforce-budget",
+        str(bruteforce_budget),
     ]
     if verbose:
         command.append("--verbose")
@@ -130,7 +133,7 @@ def run_cpp_batch(
         stdout=subprocess.PIPE,
         stderr=None if verbose else subprocess.PIPE,
     )
-    if proc.returncode not in (0, 1):
+    if proc.returncode not in (0, 1, 2):
         stderr = proc.stderr.strip() if proc.stderr else ""
         raise RuntimeError(f"C++ run failed ({proc.returncode}): {stderr}")
     return as_list(json.loads(proc.stdout))
@@ -142,6 +145,7 @@ def run_python_cli_batch(
     ban_heuristic: bool,
     reduction_round: int,
     max_thread: int,
+    bruteforce_budget: int,
     verbose: bool,
 ) -> List[Dict[str, object]]:
     command = [
@@ -156,6 +160,8 @@ def run_python_cli_batch(
         str(reduction_round),
         "--max-thread",
         str(max_thread),
+        "--bruteforce-budget",
+        str(bruteforce_budget),
     ]
     if verbose:
         command.append("--verbose")
@@ -166,7 +172,7 @@ def run_python_cli_batch(
         stdout=subprocess.PIPE,
         stderr=None if verbose else subprocess.PIPE,
     )
-    if proc.returncode not in (0, 1):
+    if proc.returncode not in (0, 1, 2):
         stderr = proc.stderr.strip() if proc.stderr else ""
         raise RuntimeError(f"Python run failed ({proc.returncode}): {stderr}")
     return as_list(json.loads(proc.stdout))
@@ -189,6 +195,7 @@ def run_interface_batch(
     ban_heuristic: bool,
     reduction_round: int,
     max_thread: int,
+    bruteforce_budget: int,
     interface_cxx: str | None,
     verbose: bool,
 ) -> List[Dict[str, object]]:
@@ -204,6 +211,8 @@ def run_interface_batch(
         str(reduction_round),
         "--max-thread",
         str(max_thread),
+        "--bruteforce-budget",
+        str(bruteforce_budget),
     ]
     if verbose:
         command.append("--verbose")
@@ -215,7 +224,7 @@ def run_interface_batch(
         stderr=None if verbose else subprocess.PIPE,
         env=interface_env(interface_cxx),
     )
-    if proc.returncode not in (0, 1):
+    if proc.returncode not in (0, 1, 2):
         stderr = proc.stderr.strip() if proc.stderr else ""
         raise RuntimeError(
             f"Interface run failed ({proc.returncode}): {stderr}\n{proc.stdout}"
@@ -234,6 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ban-heuristic", action="store_true")
     parser.add_argument("--reduction-round", type=int, default=-1)
     parser.add_argument("--max-thread", type=int, default=-1)
+    parser.add_argument("--bruteforce-budget", type=int, default=200000)
     parser.add_argument("--verbose", action="store_true", help="forward progress logs from child processes")
     parser.add_argument("--include-reference", action="store_true", help="include the 31-crossing reference case")
     parser.add_argument("--include-benchmark", action="store_true", help="include the deterministic benchmark dataset")
@@ -258,6 +268,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.ban_heuristic,
                 args.reduction_round,
                 args.max_thread,
+                args.bruteforce_budget,
                 args.verbose,
             )
         ]
@@ -269,6 +280,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.ban_heuristic,
                 args.reduction_round,
                 args.max_thread,
+                args.bruteforce_budget,
                 args.verbose,
             )
         ]
@@ -282,6 +294,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.ban_heuristic,
                     args.reduction_round,
                     args.max_thread,
+                    args.bruteforce_budget,
                     args.interface_cxx,
                     args.verbose,
                 )

@@ -206,12 +206,37 @@ def main() -> int:
     )
     require(timed_result.timed_out, "expired Python timeout deadline should return timed-out result")
     require(len(timed_result.code) == len(trefoil), "timed-out Python result should keep a PD code")
+    resource_limited = simplify.reduce_pd_code(
+        trefoil,
+        max_paths=-1,
+        ban_heuristic=True,
+        max_thread=1,
+        bruteforce_budget=1,
+    )
+    require(
+        resource_limited.resource_limited,
+        "Python brute-force budget exhaustion should be reported",
+    )
+    require(
+        not resource_limited.timed_out,
+        "Python brute-force budget exhaustion should not be reported as a timeout",
+    )
+    require(
+        resource_limited.tested_green_paths == 1,
+        "Python brute-force budget should cap checked green paths",
+    )
     try:
         simplify.reduce_pd_code(trefoil, timeout=0)
     except ValueError:
         pass
     else:
         raise AssertionError("timeout=0 should be rejected")
+    try:
+        simplify.reduce_pd_code(trefoil, bruteforce_budget=0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("bruteforce_budget=0 should be rejected")
 
     after = simplify.analyze_components_after_removing_crossings(trefoil, [0, 1, 2])
     require(after.components_with_crossings == 0, "removed trefoil should have no crossing-bearing components")

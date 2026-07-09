@@ -153,6 +153,7 @@ void print_help(const char* program) {
         << "With --max-paths -1, heuristic green-path sampling is enabled by default.\n"
         << "Use --ban-heuristic to force brute-force green-path enumeration.\n"
         << "Use --max-thread N to cap brute-force worker threads; -1 means auto.\n"
+        << "Use --bruteforce-budget N to cap brute-force green-path checks; -1 means no cap.\n"
         << "Use --timeout K to cap each PD-code job in seconds; -1 means no timeout.\n"
         << "Use --verbose to print progress logs to stderr.\n"
         << "Use --show-step-pd to print the canonical PD code after each witness application.\n"
@@ -449,6 +450,7 @@ void print_text_result(
     std::cout << "stopped_by_round_limit: "
               << (result.stopped_by_round_limit ? "yes" : "no") << '\n';
     std::cout << "timed_out: " << (result.timed_out ? "yes" : "no") << '\n';
+    std::cout << "resource_limited: " << (result.resource_limited ? "yes" : "no") << '\n';
 }
 
 void print_text_error(const std::string& error) {
@@ -530,7 +532,9 @@ void print_json_result(
     std::cout << "  \"stopped_by_round_limit\": "
               << (result.stopped_by_round_limit ? "true" : "false") << ",\n";
     std::cout << "  \"timed_out\": "
-              << (result.timed_out ? "true" : "false") << "\n";
+              << (result.timed_out ? "true" : "false") << ",\n";
+    std::cout << "  \"resource_limited\": "
+              << (result.resource_limited ? "true" : "false") << "\n";
     std::cout << "}\n";
 }
 
@@ -619,6 +623,14 @@ int main(int argc, char** argv) {
                 options.max_threads = std::stoi(argv[++i]);
                 if (options.max_threads < -1 || options.max_threads == 0) {
                     throw std::invalid_argument("--max-thread must be -1 or a positive integer");
+                }
+            } else if (arg == "--bruteforce-budget") {
+                if (i + 1 >= argc) {
+                    throw std::invalid_argument("--bruteforce-budget requires a value");
+                }
+                options.bruteforce_budget = std::stoll(argv[++i]);
+                if (options.bruteforce_budget < -1 || options.bruteforce_budget == 0) {
+                    throw std::invalid_argument("--bruteforce-budget must be -1 or a positive integer");
                 }
             } else if (arg == "--timeout") {
                 if (i + 1 >= argc) {
@@ -757,7 +769,7 @@ int main(int argc, char** argv) {
                     job_crossingless_components,
                     job_options,
                     reduction_round);
-                if (result.timed_out) {
+                if (result.timed_out || result.resource_limited) {
                     had_error = true;
                 }
                 const auto final_components = pdcode_simplify::analyze_components(

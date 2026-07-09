@@ -105,7 +105,7 @@ def run_peak(
             stdout_path.unlink(missing_ok=True)
         except PermissionError:
             pass
-    if proc.returncode not in (0, 1):
+    if proc.returncode not in (0, 1, 2):
         raise RuntimeError(
             f"command failed ({proc.returncode}): {' '.join(command)}"
         )
@@ -173,6 +173,7 @@ def commands_for_batch(
     max_paths: int,
     reduction_round: int,
     max_thread: int,
+    bruteforce_budget: int,
 ) -> Mapping[str, List[str]]:
     return {
         "cpp": [
@@ -186,6 +187,8 @@ def commands_for_batch(
             str(reduction_round),
             "--max-thread",
             str(max_thread),
+            "--bruteforce-budget",
+            str(bruteforce_budget),
         ],
         "python": [
             PYTHON,
@@ -199,6 +202,8 @@ def commands_for_batch(
             str(reduction_round),
             "--max-thread",
             str(max_thread),
+            "--bruteforce-budget",
+            str(bruteforce_budget),
         ],
         "interface": [
             PYTHON,
@@ -212,6 +217,8 @@ def commands_for_batch(
             str(reduction_round),
             "--max-thread",
             str(max_thread),
+            "--bruteforce-budget",
+            str(bruteforce_budget),
         ],
     }
 
@@ -244,6 +251,7 @@ def run_benchmark(
     max_paths: int,
     reduction_round: int,
     max_thread: int,
+    bruteforce_budget: int,
     repeat: int,
     sample_interval: float,
     interface_cxx: Optional[str] = None,
@@ -255,7 +263,14 @@ def run_benchmark(
     warm_interface_cache(sample_interval, interface_cxx)
     pd_file = write_batch_file(cases)
     try:
-        commands = dict(commands_for_batch(cpp_exe, pd_file, max_paths, reduction_round, max_thread))
+        commands = dict(commands_for_batch(
+            cpp_exe,
+            pd_file,
+            max_paths,
+            reduction_round,
+            max_thread,
+            bruteforce_budget,
+        ))
         if ban_heuristic:
             commands = {engine: add_ban_heuristic(command) for engine, command in commands.items()}
         if verbose:
@@ -386,6 +401,7 @@ def plot_aggregate(
     max_paths: int,
     reduction_round: int,
     max_thread: int,
+    bruteforce_budget: int,
     suite: str,
     ban_heuristic: bool,
 ) -> None:
@@ -447,7 +463,7 @@ def plot_aggregate(
         (
             f"Single-process batches over {case_count} deterministic cases, {repeat} repeat(s), "
             f"max_paths={max_paths}, reduction_round={reduction_round}, "
-            f"max_thread={max_thread}, "
+            f"max_thread={max_thread}, bruteforce_budget={bruteforce_budget}, "
             f"heuristic={'off' if ban_heuristic else 'on'}. "
             f"C++ is {time_speedup:.1f}x faster; "
             f"interface is {interface_overhead:.1f}x C++ time; Python uses {rss_ratio:.1f}x peak RSS."
@@ -491,6 +507,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--ban-heuristic", action="store_true")
     parser.add_argument("--reduction-round", type=int, default=-1)
     parser.add_argument("--max-thread", type=int, default=-1)
+    parser.add_argument("--bruteforce-budget", type=int, default=200000)
     parser.add_argument("--verbose", action="store_true", help="forward progress logs from child processes")
     parser.add_argument("--repeat", type=int, default=1, help="measurement repeats per case and engine")
     parser.add_argument(
@@ -521,6 +538,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args.max_paths,
         args.reduction_round,
         args.max_thread,
+        args.bruteforce_budget,
         args.repeat,
         args.sample_interval,
         interface_cxx=args.interface_cxx,
@@ -575,6 +593,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "max_paths": args.max_paths,
                 "reduction_round": args.reduction_round,
                 "max_thread": args.max_thread,
+                "bruteforce_budget": args.bruteforce_budget,
                 "repeat": args.repeat,
                 "suite": args.suite,
                 "ban_heuristic": args.ban_heuristic,
@@ -593,6 +612,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             args.max_paths,
             args.reduction_round,
             args.max_thread,
+            args.bruteforce_budget,
             args.suite,
             args.ban_heuristic,
         )

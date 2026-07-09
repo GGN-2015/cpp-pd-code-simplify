@@ -9,6 +9,7 @@
 #include <map>
 #include <atomic>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <numeric>
 #include <queue>
@@ -1291,26 +1292,25 @@ std::vector<int> heuristic_distances_to_target(
 
 void check_timeout(const SimplifierOptions& options);
 
-void collect_simple_paths_dfs(
+bool visit_simple_paths_dfs(
     const DualGraph& graph,
     int current,
     int target,
     int cutoff,
-    int max_paths,
     int current_weight,
     const std::vector<int>& distance,
     std::vector<char>& visited,
     std::vector<int>& current_path,
-    std::vector<std::vector<int>>& paths,
-    const SimplifierOptions& options) {
+    const SimplifierOptions& options,
+    const std::function<bool(const std::vector<int>&)>& visitor) {
     check_timeout(options);
     const int infinity = std::numeric_limits<int>::max() / 4;
     if (static_cast<int>(current_path.size()) - 1 >= cutoff) {
-        return;
+        return true;
     }
     if (current < 0 || current >= static_cast<int>(distance.size()) ||
         distance[current] == infinity || current_weight + distance[current] >= cutoff) {
-        return;
+        return true;
     }
 
     for (int edge_index : graph.adjacency[current]) {
@@ -1331,75 +1331,65 @@ void collect_simple_paths_dfs(
         current_path.push_back(next);
         visited[next] = true;
 
+        bool keep_going = true;
         if (next == target) {
-            paths.push_back(current_path);
-            if (max_paths != -1 && static_cast<int>(paths.size()) > max_paths) {
-                visited[next] = false;
-                current_path.pop_back();
-                return;
-            }
+            keep_going = visitor(current_path);
         } else {
-            collect_simple_paths_dfs(
+            keep_going = visit_simple_paths_dfs(
                 graph,
                 next,
                 target,
                 cutoff,
-                max_paths,
                 next_weight,
                 distance,
                 visited,
                 current_path,
-                paths,
-                options);
-            if (max_paths != -1 && static_cast<int>(paths.size()) > max_paths) {
-                visited[next] = false;
-                current_path.pop_back();
-                return;
-            }
+                options,
+                visitor);
         }
 
         visited[next] = false;
         current_path.pop_back();
+        if (!keep_going) {
+            return false;
+        }
     }
+    return true;
 }
 
-std::vector<std::vector<int>> collect_simple_paths(
+bool visit_simple_paths(
     const DualGraph& graph,
     int source,
     int target,
     int cutoff,
-    int max_paths,
-    const SimplifierOptions& options) {
+    const SimplifierOptions& options,
+    const std::function<bool(const std::vector<int>&)>& visitor) {
     check_timeout(options);
-    std::vector<std::vector<int>> paths;
     if (source < 0 || target < 0 ||
         source >= static_cast<int>(graph.faces.size()) ||
         target >= static_cast<int>(graph.faces.size()) ||
         cutoff <= 0) {
-        return paths;
+        return true;
     }
     if (source == target) {
-        paths.push_back(std::vector<int>{source});
-        return paths;
+        return visitor(std::vector<int>{source});
     }
 
     std::vector<char> visited(graph.faces.size(), false);
     std::vector<int> current_path{source};
     const std::vector<int> distance = heuristic_distances_to_target(graph, target, cutoff, options);
     visited[source] = true;
-    collect_simple_paths_dfs(
+    return visit_simple_paths_dfs(
         graph,
         source,
         target,
         cutoff,
-        max_paths,
         0,
         distance,
         visited,
         current_path,
-        paths,
-        options);
-    return paths;
+        options,
+        visitor);
 }
 
 std::vector<int> heuristic_distances_to_target(
@@ -2170,6 +2160,9 @@ void validate_timeout_options(const SimplifierOptions& options) {
     if (options.timeout_seconds < -1 || options.timeout_seconds == 0) {
         throw std::invalid_argument("timeout must be -1 or a positive integer");
     }
+    if (options.bruteforce_budget < -1 || options.bruteforce_budget == 0) {
+        throw std::invalid_argument("bruteforce budget must be -1 or a positive integer");
+    }
 }
 
 class TimeoutError : public std::runtime_error {
@@ -2677,9 +2670,34 @@ struct RedPathSearchOutcome {
     bool completed = false;
     bool skipped = false;
     bool found = false;
+    bool resource_limited = false;
     std::size_t tested_green_paths = 0;
     SimplificationResult witness;
 };
+
+struct BruteForceBudgetState {
+    explicit BruteForceBudgetState(long long limit_value) : limit(limit_value) {}
+
+    long long limit = -1;
+    std::atomic<long long> used{0};
+    std::atomic<bool> exhausted{false};
+};
+
+bool take_bruteforce_budget(BruteForceBudgetState* budget) {
+    if (budget == nullptr || budget->limit < 0) {
+        return true;
+    }
+    const long long previous = budget->used.fetch_add(1, std::memory_order_relaxed);
+    if (previous >= budget->limit) {
+        budget->exhausted.store(true, std::memory_order_relaxed);
+        return false;
+    }
+    return true;
+}
+
+bool bruteforce_budget_exhausted(const BruteForceBudgetState* budget) {
+    return budget != nullptr && budget->exhausted.load(std::memory_order_relaxed);
+}
 
 RedPathSearchOutcome search_single_red_path(
     const PDCode& code,
@@ -2689,12 +2707,17 @@ RedPathSearchOutcome search_single_red_path(
     const SimplifierOptions& options,
     const std::string& path_search_mode,
     int red_index,
-    const std::atomic<int>* best_found_index) {
+    const std::atomic<int>* best_found_index,
+    BruteForceBudgetState* brute_budget) {
     check_timeout(options);
     RedPathSearchOutcome outcome;
     outcome.witness.path_search_mode = path_search_mode;
     if (should_skip_parallel_red_path(red_index, best_found_index)) {
         outcome.skipped = true;
+        return outcome;
+    }
+    if (bruteforce_budget_exhausted(brute_budget)) {
+        outcome.resource_limited = true;
         return outcome;
     }
 
@@ -2718,38 +2741,21 @@ RedPathSearchOutcome search_single_red_path(
         }
     }
 
-    std::vector<std::vector<int>> paths;
     const int cutoff = static_cast<int>(red_path.size()) - 1;
-    for (int source : sources) {
-        for (int destination : destinations) {
-            check_timeout(options);
-            if (should_skip_parallel_red_path(red_index, best_found_index)) {
-                outcome.skipped = true;
-                return outcome;
-            }
-            std::vector<std::vector<int>> found_paths;
-            if (options.max_paths == -1 && !options.ban_heuristic) {
-                found_paths = collect_heuristic_paths(graph, source, destination, cutoff, options);
-            } else {
-                found_paths = collect_simple_paths(
-                    graph, source, destination, cutoff, options.max_paths, options);
-            }
-            paths.insert(paths.end(), found_paths.begin(), found_paths.end());
-            if (options.max_paths != -1 && static_cast<int>(paths.size()) > options.max_paths) {
-                break;
-            }
-        }
-    }
 
-    for (const auto& green_path : paths) {
+    auto test_green_path = [&](const std::vector<int>& green_path) {
         check_timeout(options);
         if (should_skip_parallel_red_path(red_index, best_found_index)) {
             outcome.skipped = true;
-            return outcome;
+            return false;
+        }
+        if (!take_bruteforce_budget(brute_budget)) {
+            outcome.resource_limited = true;
+            return false;
         }
         ++outcome.tested_green_paths;
         if (green_path.size() >= red_path.size()) {
-            continue;
+            return true;
         }
         if (do_check(
                 diagram,
@@ -2763,7 +2769,7 @@ RedPathSearchOutcome search_single_red_path(
                 outcome.found = true;
                 outcome.completed = true;
                 outcome.witness.tested_green_paths = outcome.tested_green_paths;
-                return outcome;
+                return false;
             }
             clear_witness(outcome.witness);
         }
@@ -2779,9 +2785,47 @@ RedPathSearchOutcome search_single_red_path(
                 outcome.found = true;
                 outcome.completed = true;
                 outcome.witness.tested_green_paths = outcome.tested_green_paths;
-                return outcome;
+                return false;
             }
             clear_witness(outcome.witness);
+        }
+        return true;
+    };
+
+    for (int source : sources) {
+        for (int destination : destinations) {
+            check_timeout(options);
+            if (should_skip_parallel_red_path(red_index, best_found_index)) {
+                outcome.skipped = true;
+                return outcome;
+            }
+            if (options.max_paths == -1 && !options.ban_heuristic) {
+                const std::vector<std::vector<int>> found_paths =
+                    collect_heuristic_paths(graph, source, destination, cutoff, options);
+                for (const auto& green_path : found_paths) {
+                    if (!test_green_path(green_path)) {
+                        return outcome;
+                    }
+                }
+            } else {
+                std::size_t visited_for_pair = 0;
+                const bool completed = visit_simple_paths(
+                    graph,
+                    source,
+                    destination,
+                    cutoff,
+                    options,
+                    [&](const std::vector<int>& green_path) {
+                        if (options.max_paths != -1 && visited_for_pair > static_cast<std::size_t>(options.max_paths)) {
+                            return false;
+                        }
+                        ++visited_for_pair;
+                        return test_green_path(green_path);
+                    });
+                if (!completed || outcome.found || outcome.skipped || outcome.resource_limited) {
+                    return outcome;
+                }
+            }
         }
     }
 
@@ -2806,12 +2850,18 @@ SimplificationResult merge_red_path_outcomes(
 
     const int limit = first_found >= 0 ? first_found : static_cast<int>(outcomes.size()) - 1;
     for (int i = 0; i <= limit; ++i) {
-        if (!outcomes[i].completed && !outcomes[i].found) {
+        if (outcomes[i].resource_limited) {
+            result.resource_limited = true;
+        }
+        if (!outcomes[i].completed && !outcomes[i].found && !outcomes[i].resource_limited && !result.resource_limited) {
             std::ostringstream message;
             message << "Parallel brute-force search did not complete red path " << i;
             throw std::runtime_error(message.str());
         }
-        ++result.tested_red_paths;
+        if (outcomes[i].completed || outcomes[i].found || outcomes[i].resource_limited ||
+            outcomes[i].tested_green_paths > 0) {
+            ++result.tested_red_paths;
+        }
         result.tested_green_paths += outcomes[i].tested_green_paths;
     }
 
@@ -2822,6 +2872,9 @@ SimplificationResult merge_red_path_outcomes(
         result.tested_green_paths = 0;
         for (int i = 0; i <= first_found; ++i) {
             result.tested_green_paths += outcomes[i].tested_green_paths;
+        }
+        for (int i = 0; i <= first_found; ++i) {
+            result.resource_limited = result.resource_limited || outcomes[i].resource_limited;
         }
     }
     return result;
@@ -2834,7 +2887,8 @@ SimplificationResult find_simplification_parallel_bruteforce(
     const std::vector<std::vector<Endpoint>>& red_lines,
     const SimplifierOptions& options,
     const std::string& path_search_mode,
-    int worker_count) {
+    int worker_count,
+    BruteForceBudgetState* brute_budget) {
     std::vector<RedPathSearchOutcome> outcomes(red_lines.size());
     std::atomic<int> next_index(0);
     std::atomic<int> best_found_index(static_cast<int>(red_lines.size()));
@@ -2861,7 +2915,8 @@ SimplificationResult find_simplification_parallel_bruteforce(
                     options,
                     path_search_mode,
                     index,
-                    &best_found_index);
+                    &best_found_index,
+                    brute_budget);
                 if (outcome.found) {
                     record_parallel_found_index(index, &best_found_index);
                 }
@@ -2913,11 +2968,14 @@ SimplificationResult find_simplification(
               run_options.max_threads,
               static_cast<int>(red_lines.size()))
         : 1;
+    BruteForceBudgetState brute_budget(run_options.bruteforce_budget);
+    BruteForceBudgetState* brute_budget_ptr = brute_force_mode ? &brute_budget : nullptr;
     if (brute_force_mode && run_options.max_threads == -1) {
         std::ostringstream message;
         message << "bruteforce_threads max_thread=-1"
                 << " actual_threads=" << worker_count
-                << " red_paths=" << red_lines.size();
+                << " red_paths=" << red_lines.size()
+                << " bruteforce_budget=" << run_options.bruteforce_budget;
         emit_progress(run_options, message.str());
     }
     if (worker_count > 1) {
@@ -2928,7 +2986,8 @@ SimplificationResult find_simplification(
             red_lines,
             run_options,
             result.path_search_mode,
-            worker_count);
+            worker_count,
+            brute_budget_ptr);
     }
 
     for (const auto& red_path : red_lines) {
@@ -2942,13 +3001,19 @@ SimplificationResult find_simplification(
             run_options,
             result.path_search_mode,
             -1,
-            nullptr);
+            nullptr,
+            brute_budget_ptr);
         result.tested_green_paths += outcome.tested_green_paths;
+        result.resource_limited = result.resource_limited || outcome.resource_limited;
+        if (outcome.resource_limited) {
+            return result;
+        }
         if (outcome.found) {
             SimplificationResult found = outcome.witness;
             found.path_search_mode = result.path_search_mode;
             found.tested_red_paths = result.tested_red_paths;
             found.tested_green_paths = result.tested_green_paths;
+            found.resource_limited = outcome.resource_limited;
             return found;
         }
     }
@@ -2975,6 +3040,7 @@ ReductionResult reduce_pd_code(
                     << " reduction_round=" << reduction_round
                     << " max_paths=" << run_options.max_paths
                     << " max_thread=" << run_options.max_threads
+                    << " bruteforce_budget=" << run_options.bruteforce_budget
                     << " timeout=" << run_options.timeout_seconds
                     << " heuristic=" << (run_options.ban_heuristic ? "off" : "on");
             emit_progress(run_options, message.str());
@@ -3057,13 +3123,15 @@ ReductionResult reduce_pd_code(
             output.tested_red_paths += search.tested_red_paths;
             output.tested_green_paths += search.tested_green_paths;
             output.last_path_search_mode = search.path_search_mode;
+            output.resource_limited = output.resource_limited || search.resource_limited;
             {
                 std::ostringstream message;
                 message << "round " << round
                         << " search_done found=" << (search.found ? "yes" : "no")
                         << " mode=" << search.path_search_mode
                         << " tested_red=" << search.tested_red_paths
-                        << " tested_green=" << search.tested_green_paths;
+                        << " tested_green=" << search.tested_green_paths
+                        << " resource_limited=" << (search.resource_limited ? "yes" : "no");
                 emit_progress(run_options, message.str());
             }
 
@@ -3077,19 +3145,22 @@ ReductionResult reduce_pd_code(
                     std::ostringstream message;
                     message << "round " << round
                             << " brute_fallback_start crossings=" << output.code.size()
-                            << " max_thread=" << brute_options.max_threads;
+                            << " max_thread=" << brute_options.max_threads
+                            << " bruteforce_budget=" << brute_options.bruteforce_budget;
                     emit_progress(run_options, message.str());
                 }
                 SimplificationResult brute = find_simplification(output.code, brute_options);
                 output.tested_red_paths += brute.tested_red_paths;
                 output.tested_green_paths += brute.tested_green_paths;
                 output.last_path_search_mode = brute.path_search_mode;
+                output.resource_limited = output.resource_limited || brute.resource_limited;
                 {
                     std::ostringstream message;
                     message << "round " << round
                             << " brute_fallback_done found=" << (brute.found ? "yes" : "no")
                             << " tested_red=" << brute.tested_red_paths
-                            << " tested_green=" << brute.tested_green_paths;
+                            << " tested_green=" << brute.tested_green_paths
+                            << " resource_limited=" << (brute.resource_limited ? "yes" : "no");
                     emit_progress(run_options, message.str());
                 }
                 if (brute.found) {
@@ -3099,6 +3170,15 @@ ReductionResult reduce_pd_code(
             }
 
             if (!search.found) {
+                if (output.resource_limited) {
+                    std::ostringstream message;
+                    message << "round " << round
+                            << " stop_resource_limited crossings=" << output.code.size()
+                            << " tested_red_total=" << output.tested_red_paths
+                            << " tested_green_total=" << output.tested_green_paths;
+                    emit_progress(run_options, message.str());
+                    break;
+                }
                 {
                     std::ostringstream message;
                     message << "round " << round
@@ -3188,6 +3268,7 @@ ReductionResult reduce_pd_code(
 
     output.stopped_by_round_limit =
         !output.timed_out &&
+        !output.resource_limited &&
         reduction_round >= 0 &&
         output.mid_simplification_rounds >= reduction_round;
     {
@@ -3200,7 +3281,8 @@ ReductionResult reduce_pd_code(
                 << " r3_moves=" << output.reidemeister_iii_moves
                 << " stopped_by_round_limit="
                 << (output.stopped_by_round_limit ? "yes" : "no")
-                << " timed_out=" << (output.timed_out ? "yes" : "no");
+                << " timed_out=" << (output.timed_out ? "yes" : "no")
+                << " resource_limited=" << (output.resource_limited ? "yes" : "no");
         emit_progress(run_options, message.str());
     }
     return output;

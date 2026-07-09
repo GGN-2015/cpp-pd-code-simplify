@@ -95,6 +95,8 @@ component.
 --max-paths N                  Cap accepted green paths; default -1.
 --ban-heuristic                With --max-paths -1, enumerate all green paths.
 --reduction-round K            Maximum mid-simplification rounds; -1 means until stable.
+--max-thread N                 Maximum brute-force worker threads; -1 means auto.
+--bruteforce-budget N          Cap brute-force green-path checks; default 200000, -1 means no cap.
 --timeout K                    Per-PD-code timeout in seconds; -1 means no timeout.
 --verbose                      Print timestamped progress logs to stderr.
 --show-step-pd                 Print each post-witness PD code to stdout.
@@ -108,7 +110,15 @@ component.
 `--max-paths -1` is the default. In that mode the executable uses deterministic
 heuristic green-path sampling. Add `--ban-heuristic` to run exhaustive
 green-path enumeration instead. If `--max-paths` is any other integer, the
-legacy bounded path collector is used.
+legacy bounded DFS ordering is used.
+
+Brute-force green-path enumeration is streamed: each candidate path is checked
+as soon as it is generated, so the implementation does not keep the full set of
+simple green paths in memory. `--bruteforce-budget N` caps the number of
+brute-force green paths checked for one PD-code job. The default is `200000`;
+use `--bruteforce-budget -1` only when an unbounded proof attempt is acceptable.
+If the budget is exhausted, output still includes the current best PD code and
+sets `resource_limited: true`.
 
 `--reduction-round -1` is the default. It repeatedly applies valid
 mid-simplification witnesses. Use `--reduction-round K` to cap the number of
@@ -163,10 +173,11 @@ enabled by default.
 Batch mode keeps going after a single input fails; failed items are reported
 with an `error` field in JSON output or an `error:` line in text output.
 
-The process exits with code `0` when every input reaches a non-timed-out
-result, including inputs that are already stable. It exits with code `2` when
-at least one input reports an error or `timed_out: true`. In batch mode, errors
-and timeouts are isolated to the affected item and later PD codes still run.
+The process exits with code `0` when every input reaches a non-timed-out,
+non-resource-limited result, including inputs that are already stable. It exits
+with code `2` when at least one input reports an error, `timed_out: true`, or
+`resource_limited: true`. In batch mode, errors, timeouts, and resource-limit
+stops are isolated to the affected item and later PD codes still run.
 
 ## C++ Library Use
 

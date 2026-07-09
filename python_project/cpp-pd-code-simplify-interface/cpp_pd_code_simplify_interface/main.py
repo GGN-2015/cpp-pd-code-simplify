@@ -877,6 +877,7 @@ def _load_library() -> ctypes.CDLL:
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_int,
+        ctypes.c_longlong,
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_int,
@@ -901,6 +902,7 @@ def _run_one_direct(
     ban_heuristic: bool = False,
     reduction_round: int = -1,
     max_thread: int = -1,
+    bruteforce_budget: int = 200000,
     timeout: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
@@ -912,6 +914,8 @@ def _run_one_direct(
         raise ValueError("reduction_round must be -1 or a non-negative integer")
     if max_thread < -1 or max_thread == 0:
         raise ValueError("max_thread must be -1 or a positive integer")
+    if bruteforce_budget < -1 or bruteforce_budget == 0:
+        raise ValueError("bruteforce_budget must be -1 or a positive integer")
     if timeout < -1 or timeout == 0:
         raise ValueError("timeout must be -1 or a positive integer")
     library = _load_library()
@@ -927,6 +931,7 @@ def _run_one_direct(
         1 if ban_heuristic else 0,
         int(reduction_round),
         int(max_thread),
+        int(bruteforce_budget),
         int(timeout),
         1 if verbose else 0,
         1 if show_step_pd else 0,
@@ -969,6 +974,7 @@ def _run_one(
     ban_heuristic: bool = False,
     reduction_round: int = -1,
     max_thread: int = -1,
+    bruteforce_budget: int = 200000,
     timeout: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
@@ -980,6 +986,8 @@ def _run_one(
         raise ValueError("reduction_round must be -1 or a non-negative integer")
     if max_thread < -1 or max_thread == 0:
         raise ValueError("max_thread must be -1 or a positive integer")
+    if bruteforce_budget < -1 or bruteforce_budget == 0:
+        raise ValueError("bruteforce_budget must be -1 or a positive integer")
     if timeout < -1 or timeout == 0:
         raise ValueError("timeout must be -1 or a positive integer")
 
@@ -989,6 +997,7 @@ def _run_one(
         "ban_heuristic": bool(ban_heuristic),
         "reduction_round": int(reduction_round),
         "max_thread": int(max_thread),
+        "bruteforce_budget": int(bruteforce_budget),
         "timeout": int(timeout),
         "verbose": bool(verbose),
         "show_step_pd": bool(show_step_pd),
@@ -1071,6 +1080,7 @@ def simplify(
     ban_heuristic: bool = False,
     reduction_round: int = -1,
     max_thread: int = -1,
+    bruteforce_budget: int = 200000,
     timeout: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
@@ -1088,6 +1098,7 @@ def simplify(
             ban_heuristic=ban_heuristic,
             reduction_round=reduction_round,
             max_thread=max_thread,
+            bruteforce_budget=bruteforce_budget,
             timeout=timeout,
             verbose=verbose,
             show_step_pd=show_step_pd,
@@ -1104,6 +1115,7 @@ def simplify_many(
     ban_heuristic: bool = False,
     reduction_round: int = -1,
     max_thread: int = -1,
+    bruteforce_budget: int = 200000,
     timeout: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
@@ -1122,6 +1134,7 @@ def simplify_many(
                 ban_heuristic=ban_heuristic,
                 reduction_round=reduction_round,
                 max_thread=max_thread,
+                bruteforce_budget=bruteforce_budget,
                 timeout=timeout,
                 verbose=verbose,
                 show_step_pd=show_step_pd,
@@ -1153,6 +1166,7 @@ def _main_impl(argv: Sequence[str]) -> int:
     parser.add_argument("--ban-heuristic", action="store_true")
     parser.add_argument("--reduction-round", type=int, default=-1)
     parser.add_argument("--max-thread", type=int, default=-1)
+    parser.add_argument("--bruteforce-budget", type=int, default=200000)
     parser.add_argument("--timeout", type=int, default=-1)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--show-step-pd", action="store_true")
@@ -1164,6 +1178,8 @@ def _main_impl(argv: Sequence[str]) -> int:
         parser.error("--reduction-round must be -1 or a non-negative integer")
     if args.max_thread < -1 or args.max_thread == 0:
         parser.error("--max-thread must be -1 or a positive integer")
+    if args.bruteforce_budget < -1 or args.bruteforce_budget == 0:
+        parser.error("--bruteforce-budget must be -1 or a positive integer")
     if args.timeout < -1 or args.timeout == 0:
         parser.error("--timeout must be -1 or a positive integer")
     if args.pd_code and args.pd_code_option:
@@ -1197,6 +1213,7 @@ def _main_impl(argv: Sequence[str]) -> int:
                     ban_heuristic=args.ban_heuristic,
                     reduction_round=args.reduction_round,
                     max_thread=args.max_thread,
+                    bruteforce_budget=args.bruteforce_budget,
                     timeout=args.timeout,
                     verbose=args.verbose,
                     show_step_pd=args.show_step_pd,
@@ -1208,7 +1225,7 @@ def _main_impl(argv: Sequence[str]) -> int:
                 if show_labels:
                     item = {"label": label, **item}
                 batch_payload.append(item)
-                if item.get("timed_out"):
+                if item.get("timed_out") or item.get("resource_limited"):
                     exit_code = 2
             except KeyboardInterrupt:
                 exit_code = 130
@@ -1232,6 +1249,7 @@ def _main_impl(argv: Sequence[str]) -> int:
                 ban_heuristic=args.ban_heuristic,
                 reduction_round=args.reduction_round,
                 max_thread=args.max_thread,
+                bruteforce_budget=args.bruteforce_budget,
                 timeout=args.timeout,
                 verbose=args.verbose,
                 show_step_pd=args.show_step_pd,
@@ -1240,7 +1258,7 @@ def _main_impl(argv: Sequence[str]) -> int:
                 log_file=args.log_file,
                 _tee_parent=False,
             )
-            if isinstance(payload, dict) and payload.get("timed_out"):
+            if isinstance(payload, dict) and (payload.get("timed_out") or payload.get("resource_limited")):
                 exit_code = 2
         except KeyboardInterrupt:
             exit_code = 130

@@ -17,6 +17,7 @@ def main() -> int:
             ban_heuristic=bool(request.get("ban_heuristic", False)),
             reduction_round=int(request.get("reduction_round", -1)),
             max_thread=int(request.get("max_thread", -1)),
+            bruteforce_budget=int(request.get("bruteforce_budget", 200000)),
             timeout=int(request.get("timeout", -1)),
             verbose=bool(request.get("verbose", False)),
             show_step_pd=bool(request.get("show_step_pd", False)),

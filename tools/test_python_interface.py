@@ -93,12 +93,27 @@ def main() -> int:
     timed_trefoil = interface.simplify(TREFOIL, reduction_round=0, timeout=1)
     assert timed_trefoil["final_pd_code"] == TREFOIL
     assert timed_trefoil["timed_out"] is False
+    resource_limited = interface.simplify(
+        TREFOIL,
+        ban_heuristic=True,
+        max_thread=1,
+        bruteforce_budget=1,
+    )
+    assert resource_limited["resource_limited"] is True
+    assert resource_limited["timed_out"] is False
+    assert resource_limited["tested_green_paths"] == 1
     try:
         interface.simplify(TREFOIL, timeout=0)
     except ValueError:
         pass
     else:
         raise AssertionError("timeout=0 should be rejected")
+    try:
+        interface.simplify(TREFOIL, bruteforce_budget=0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("bruteforce_budget=0 should be rejected")
 
     orientation_repair = interface.simplify(ORIENTATION_REPAIR, reduction_round=0)
     assert (

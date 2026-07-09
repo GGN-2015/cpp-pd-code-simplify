@@ -57,6 +57,7 @@ def run_cpp(
     ban_heuristic: bool,
     reduction_round: int,
     max_thread: int,
+    bruteforce_budget: int,
     timeout: Optional[float],
     verbose: bool,
 ) -> Tuple[float, int, Mapping[str, object]]:
@@ -71,6 +72,8 @@ def run_cpp(
         str(reduction_round),
         "--max-thread",
         str(max_thread),
+        "--bruteforce-budget",
+        str(bruteforce_budget),
     ]
     if verbose:
         command.append("--verbose")
@@ -87,7 +90,7 @@ def run_cpp(
         timeout=timeout,
     )
     elapsed = time.perf_counter() - start
-    if proc.returncode not in (0, 1):
+    if proc.returncode not in (0, 1, 2):
         stderr = proc.stderr.strip() if proc.stderr else ""
         raise RuntimeError(
             f"C++ run failed for {case.name} ({proc.returncode}): {stderr}"
@@ -115,6 +118,7 @@ def benchmark(
     repeat: int,
     reduction_round: int,
     max_thread: int,
+    bruteforce_budget: int,
     timeout: Optional[float],
     verbose: bool,
 ) -> List[RawRow]:
@@ -134,6 +138,7 @@ def benchmark(
                         ban_heuristic=ban_heuristic,
                         reduction_round=reduction_round,
                         max_thread=max_thread,
+                        bruteforce_budget=bruteforce_budget,
                         timeout=timeout,
                         verbose=verbose,
                     )
@@ -157,6 +162,7 @@ def benchmark(
                     "time_seconds": elapsed,
                     "return_code": return_code,
                     "timed_out": timed_out,
+                    "resource_limited": bool(payload.get("resource_limited")) if payload else False,
                     "simplification_found": bool(payload.get("simplification_found")),
                     "tested_red_paths": int(payload.get("tested_red_paths", 0)),
                     "tested_green_paths": int(payload.get("tested_green_paths", 0)),
@@ -173,7 +179,8 @@ def benchmark(
                     f"reduction={reduced:4d}/{case.crossings:<4d} "
                     f"({row['reduction_percent']:6.2f}%) "
                     f"green={row['tested_green_paths']} "
-                    f"timeout={'yes' if timed_out else 'no'}"
+                    f"timeout={'yes' if timed_out else 'no'} "
+                    f"resource_limited={'yes' if row['resource_limited'] else 'no'}"
                 )
     return rows
 
@@ -228,6 +235,7 @@ def plot_summary(
     case_count: int,
     reduction_round: int,
     max_thread: int,
+    bruteforce_budget: int,
 ) -> None:
     import matplotlib
 
@@ -281,7 +289,7 @@ def plot_summary(
         (
             f"C++ only, max_paths=-1, {case_count} zip-random large cases, "
             f"reduction_round={reduction_round}, {repeat} repeat(s). "
-            f"max_thread={max_thread}. "
+            f"max_thread={max_thread}, bruteforce_budget={bruteforce_budget}. "
             f"Brute/heuristic time ratio: {time_ratio:.2f}x."
         ),
         ha="center",
@@ -320,6 +328,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--reduction-round", type=int, default=-1)
     parser.add_argument("--max-thread", type=int, default=-1)
+    parser.add_argument("--bruteforce-budget", type=int, default=200000)
     parser.add_argument("--case", action="append", choices=case_names(), help="case to run; default uses random suite")
     parser.add_argument("--timeout", type=float, default=0.0, help="per-run timeout in seconds; 0 disables it")
     parser.add_argument("--verbose", action="store_true", help="forward progress logs from child processes")
@@ -344,6 +353,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args.repeat,
         args.reduction_round,
         args.max_thread,
+        args.bruteforce_budget,
         timeout,
         args.verbose,
     )
@@ -366,6 +376,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "time_seconds",
                 "return_code",
                 "timed_out",
+                "resource_limited",
                 "simplification_found",
                 "tested_red_paths",
                 "tested_green_paths",
@@ -401,6 +412,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "max_paths": -1,
                 "reduction_round": args.reduction_round,
                 "max_thread": args.max_thread,
+                "bruteforce_budget": args.bruteforce_budget,
                 "repeat": args.repeat,
                 "suite": "random",
                 "verbose": args.verbose,
@@ -416,6 +428,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             case_count=len(cases),
             reduction_round=args.reduction_round,
             max_thread=args.max_thread,
+            bruteforce_budget=args.bruteforce_budget,
         )
     return 0
 

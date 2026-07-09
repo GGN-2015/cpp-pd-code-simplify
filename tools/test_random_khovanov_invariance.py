@@ -177,6 +177,7 @@ def run_cpp_simplifier(
     executable: Path,
     pd_text: str,
     max_thread: int,
+    bruteforce_budget: int,
     timeout: int,
 ) -> Dict[str, object]:
     command = [
@@ -190,6 +191,8 @@ def run_cpp_simplifier(
         "-1",
         "--max-thread",
         str(max_thread),
+        "--bruteforce-budget",
+        str(bruteforce_budget),
         "--timeout",
         str(timeout),
     ]
@@ -212,33 +215,52 @@ def run_cpp_simplifier(
         raise RuntimeError(f"C++ simplifier returned an error payload: {payload}")
     if payload.get("timed_out"):
         raise RuntimeError(f"C++ simplifier timed out before a final invariance check: {payload}")
+    if payload.get("resource_limited"):
+        raise RuntimeError(f"C++ simplifier hit the brute-force resource budget: {payload}")
     return payload
 
 
-def run_python_simplifier(pd_text: str, max_thread: int, timeout: int) -> Dict[str, object]:
+def run_python_simplifier(
+    pd_text: str,
+    max_thread: int,
+    bruteforce_budget: int,
+    timeout: int,
+) -> Dict[str, object]:
     code = pysimplify.parse_pd_code(pd_text)
     result = pysimplify.reduce_pd_code(
         code,
         max_paths=-1,
         reduction_round=-1,
         max_thread=max_thread,
+        bruteforce_budget=bruteforce_budget,
         timeout=timeout,
     )
     if result.timed_out:
         raise RuntimeError("Python simplifier timed out before a final invariance check")
+    if result.resource_limited:
+        raise RuntimeError("Python simplifier hit the brute-force resource budget")
     return result.to_json()
 
 
-def run_interface_simplifier(interface, pd_text: str, max_thread: int, timeout: int) -> Dict[str, object]:
+def run_interface_simplifier(
+    interface,
+    pd_text: str,
+    max_thread: int,
+    bruteforce_budget: int,
+    timeout: int,
+) -> Dict[str, object]:
     result = interface.simplify(
         pd_text,
         max_paths=-1,
         reduction_round=-1,
         max_thread=max_thread,
+        bruteforce_budget=bruteforce_budget,
         timeout=timeout,
     )
     if result.get("timed_out"):
         raise RuntimeError("Python C++ interface timed out before a final invariance check")
+    if result.get("resource_limited"):
+        raise RuntimeError("Python C++ interface hit the brute-force resource budget")
     return result
 
 
@@ -287,6 +309,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260709)
     parser.add_argument("--cpp-exe", type=Path, default=None)
     parser.add_argument("--max-thread", type=int, default=4)
+    parser.add_argument("--bruteforce-budget", type=int, default=200000)
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--cxx", default=preferred_cxx())
     parser.add_argument(
@@ -306,6 +329,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     if args.max_thread < -1 or args.max_thread == 0:
         raise ValueError("--max-thread must be -1 or a positive integer")
+    if args.bruteforce_budget < -1 or args.bruteforce_budget == 0:
+        raise ValueError("--bruteforce-budget must be -1 or a positive integer")
     if args.timeout < -1 or args.timeout == 0:
         raise ValueError("--timeout must be -1 or a positive integer")
 
@@ -317,17 +342,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     for case in cases:
         input_kh = kh_value(cppkh_interface, kh_cache, case.pd_text)
-        cpp_payload = run_cpp_simplifier(executable, case.pd_text, args.max_thread, args.timeout)
+        cpp_payload = run_cpp_simplifier(
+            executable,
+            case.pd_text,
+            args.max_thread,
+            args.bruteforce_budget,
+            args.timeout,
+        )
         check_backend_result(cppkh_interface, kh_cache, case, "C++ CLI", cpp_payload, input_kh)
 
         backends = ["C++ CLI"]
         if not args.skip_python:
-            python_payload = run_python_simplifier(case.pd_text, args.max_thread, args.timeout)
+            python_payload = run_python_simplifier(
+                case.pd_text,
+                args.max_thread,
+                args.bruteforce_budget,
+                args.timeout,
+            )
             check_backend_result(cppkh_interface, kh_cache, case, "Python prototype", python_payload, input_kh)
             backends.append("Python prototype")
 
         if interface is not None:
-            interface_payload = run_interface_simplifier(interface, case.pd_text, args.max_thread, args.timeout)
+            interface_payload = run_interface_simplifier(
+                interface,
+                case.pd_text,
+                args.max_thread,
+                args.bruteforce_budget,
+                args.timeout,
+            )
             check_backend_result(
                 cppkh_interface,
                 kh_cache,
