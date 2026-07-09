@@ -29,6 +29,8 @@ constexpr int kHeuristicMinStateBudget = 128;
 constexpr int kHeuristicMaxStateBudget = 4096;
 constexpr int kHeuristicMinPathBudget = 24;
 constexpr int kHeuristicMaxPathBudget = 384;
+constexpr int kR3PrepassMaxDepth = 4;
+constexpr int kR3PrepassMaxStates = 256;
 constexpr int kR3FailoverMaxDepth = 8;
 constexpr int kR3FailoverMaxStates = 4096;
 
@@ -2551,7 +2553,9 @@ struct ReidemeisterIIIFailoverResult {
 ReidemeisterIIIFailoverResult find_reidemeister_iii_failover(
     const PDCode& code,
     std::size_t crossingless_components,
-    const SimplifierOptions& options) {
+    const SimplifierOptions& options,
+    int max_depth = kR3FailoverMaxDepth,
+    int max_states = kR3FailoverMaxStates) {
     check_timeout(options);
     ReidemeisterIIIFailoverResult result;
     result.code = code;
@@ -2572,12 +2576,12 @@ ReidemeisterIIIFailoverResult find_reidemeister_iii_failover(
     std::set<std::string> seen;
     seen.insert(format_final_pd_code(code));
 
-    while (!queue.empty() && static_cast<int>(seen.size()) <= kR3FailoverMaxStates) {
+    while (!queue.empty() && static_cast<int>(seen.size()) <= max_states) {
         check_timeout(options);
         const State state = queue.front();
         queue.pop_front();
         ++result.visited_states;
-        if (state.depth >= kR3FailoverMaxDepth) {
+        if (state.depth >= max_depth) {
             continue;
         }
 
@@ -2609,7 +2613,7 @@ ReidemeisterIIIFailoverResult find_reidemeister_iii_failover(
                     canonical_output_code(simplified.code),
                     simplified.crossingless_components,
                     state.depth + 1});
-                if (static_cast<int>(seen.size()) >= kR3FailoverMaxStates) {
+                if (static_cast<int>(seen.size()) >= max_states) {
                     break;
                 }
             }
@@ -2997,10 +3001,50 @@ ReductionResult reduce_pd_code(
 
         while (reduction_round < 0 || output.mid_simplification_rounds < reduction_round) {
             check_timeout(run_options);
+            const int round = output.mid_simplification_rounds + 1;
+            if (run_options.max_paths == -1 && !run_options.ban_heuristic) {
+                {
+                    std::ostringstream message;
+                    message << "round " << round
+                            << " r3_prepass_start crossings=" << output.code.size()
+                            << " max_depth=" << kR3PrepassMaxDepth
+                            << " max_states=" << kR3PrepassMaxStates;
+                    emit_progress(run_options, message.str());
+                }
+                const ReidemeisterIIIFailoverResult r3_prepass =
+                    find_reidemeister_iii_failover(
+                        output.code,
+                        output.crossingless_components,
+                        run_options,
+                        kR3PrepassMaxDepth,
+                        kR3PrepassMaxStates);
+                {
+                    std::ostringstream message;
+                    message << "round " << round
+                            << " r3_prepass_done found=" << (r3_prepass.found ? "yes" : "no")
+                            << " depth=" << r3_prepass.depth
+                            << " visited_states=" << r3_prepass.visited_states
+                            << " final_crossings="
+                            << (r3_prepass.found ? r3_prepass.code.size() : output.code.size())
+                            << " r1_moves=" << r3_prepass.reidemeister_i_moves
+                            << " r2_moves=" << r3_prepass.reidemeister_ii_moves
+                            << " r3_moves=" << r3_prepass.reidemeister_iii_moves
+                            << " nugatory_moves=" << r3_prepass.nugatory_crossing_moves;
+                    emit_progress(run_options, message.str());
+                }
+                if (r3_prepass.found) {
+                    output.code = canonical_output_code(r3_prepass.code);
+                    output.crossingless_components = r3_prepass.crossingless_components;
+                    output.reidemeister_i_moves += r3_prepass.reidemeister_i_moves;
+                    output.reidemeister_ii_moves += r3_prepass.reidemeister_ii_moves;
+                    output.reidemeister_iii_moves += r3_prepass.reidemeister_iii_moves;
+                    output.nugatory_crossing_moves += r3_prepass.nugatory_crossing_moves;
+                    continue;
+                }
+            }
             SimplifierOptions search_options = run_options;
             search_options.require_applicable = true;
             output.last_path_search_mode = search_mode_for_options(search_options);
-            const int round = output.mid_simplification_rounds + 1;
             {
                 std::ostringstream message;
                 message << "round " << round

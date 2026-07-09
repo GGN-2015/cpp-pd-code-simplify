@@ -162,11 +162,15 @@ not a topological move; it only prevents later searches from depending on a
 stale internal row order, edge numbering, or crossing orientation.
 
 The default `--reduction-round -1` repeats until no applicable witness remains.
-In default heuristic mode, if the heuristic cannot find a witness, the
-simplifier runs a brute-force pass from the already-canonical current diagram.
-If brute force finds a witness, that witness is applied, canonicalized, and the
-loop continues in heuristic mode. If brute force also fails, the deterministic
-RIII failover described below is tried before the diagram is reported as final.
+In default heuristic mode, each round first runs a small deterministic RIII
+prepass. If this cheap prepass lowers the crossing count, the main loop starts
+over from the new canonical diagram before spending time on red-green path
+search. If the prepass cannot reduce the diagram, the heuristic red-green
+search runs. When the heuristic cannot find a witness, the simplifier runs a
+brute-force pass from the already-canonical current diagram. If brute force
+finds a witness, that witness is applied, canonicalized, and the loop continues
+in heuristic mode. If brute force also fails, the larger deterministic RIII
+failover described below is tried before the diagram is reported as final.
 
 ## Deterministic RIII Failover
 
@@ -185,7 +189,8 @@ has exactly this shape: the witness search and brute-force green-path search
 find no immediate crossing-decreasing disk, but four RIII moves expose one R2
 bigon and reduce it to 14 crossings.
 
-The failover is deterministic and shared by C++ and Python:
+The prepass and failover use the same deterministic RIII engine and are shared
+by C++ and Python:
 
 - enumerate triangular faces in the current face decomposition;
 - keep only triangles incident to three distinct crossings and with the local
@@ -196,6 +201,11 @@ The failover is deterministic and shared by C++ and Python:
 - after every RIII move, run the same R1/R2/nugatory preprocessing;
 - accept the first canonical state whose crossing count is lower than the
   starting state.
+
+The prepass uses a smaller depth and state budget than the final failover. It
+is intended to catch fast reductions such as the 16-to-14 crossing regression
+without making every heuristic round pay for the full depth-8 search. The full
+failover remains after the brute-force red-green search fails.
 
 No random choice is made. The Python C++ interface calls the same native C++
 backend, so it inherits the same move ordering and the same output. If the

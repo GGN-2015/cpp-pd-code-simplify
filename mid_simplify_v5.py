@@ -34,6 +34,8 @@ HEURISTIC_MIN_PATH_BUDGET = 24
 HEURISTIC_MAX_PATH_BUDGET = 384
 R3_FAILOVER_MAX_DEPTH = 8
 R3_FAILOVER_MAX_STATES = 4096
+R3_PREPASS_MAX_DEPTH = 4
+R3_PREPASS_MAX_STATES = 256
 
 
 class TeeTextIO:
@@ -1272,6 +1274,8 @@ def find_reidemeister_iii_failover(
     crossingless_components: int,
     timeout: int = -1,
     deadline: Optional[float] = None,
+    max_depth: int = R3_FAILOVER_MAX_DEPTH,
+    max_states: int = R3_FAILOVER_MAX_STATES,
 ) -> ReidemeisterIIIFailoverResult:
     check_timeout(timeout, deadline)
     result = ReidemeisterIIIFailoverResult(
@@ -1286,11 +1290,11 @@ def find_reidemeister_iii_failover(
     queue.append(([tuple(crossing) for crossing in code], crossingless_components, 0))
     seen: Set[str] = {format_final_pd_code(code)}
 
-    while queue and len(seen) <= R3_FAILOVER_MAX_STATES:
+    while queue and len(seen) <= max_states:
         check_timeout(timeout, deadline)
         state_code, state_crossingless, depth = queue.popleft()
         result.visited_states += 1
-        if depth >= R3_FAILOVER_MAX_DEPTH:
+        if depth >= max_depth:
             continue
 
         for move in possible_reidemeister_iii_moves(state_code):
@@ -1319,7 +1323,7 @@ def find_reidemeister_iii_failover(
                 simplified.crossingless_components,
                 depth + 1,
             ))
-            if len(seen) >= R3_FAILOVER_MAX_STATES:
+            if len(seen) >= max_states:
                 break
 
     return result
@@ -2470,6 +2474,49 @@ def reduce_pd_code(
         while reduction_round < 0 or output.mid_simplification_rounds < reduction_round:
             check_timeout(timeout, deadline)
             round_index = output.mid_simplification_rounds + 1
+            if max_paths == -1 and not ban_heuristic:
+                _emit_progress(
+                    verbose,
+                    progress,
+                    (
+                        f"round {round_index} r3_prepass_start "
+                        f"crossings={len(output.code)} "
+                        f"max_depth={R3_PREPASS_MAX_DEPTH} "
+                        f"max_states={R3_PREPASS_MAX_STATES}"
+                    ),
+                )
+                r3_prepass = find_reidemeister_iii_failover(
+                    output.code,
+                    output.crossingless_components,
+                    timeout=timeout,
+                    deadline=deadline,
+                    max_depth=R3_PREPASS_MAX_DEPTH,
+                    max_states=R3_PREPASS_MAX_STATES,
+                )
+                _emit_progress(
+                    verbose,
+                    progress,
+                    (
+                        f"round {round_index} r3_prepass_done "
+                        f"found={'yes' if r3_prepass.found else 'no'} "
+                        f"depth={r3_prepass.depth} "
+                        f"visited_states={r3_prepass.visited_states} "
+                        f"final_crossings={len(r3_prepass.code) if r3_prepass.found else len(output.code)} "
+                        f"r1_moves={r3_prepass.reidemeister_i_moves} "
+                        f"r2_moves={r3_prepass.reidemeister_ii_moves} "
+                        f"r3_moves={r3_prepass.reidemeister_iii_moves} "
+                        f"nugatory_moves={r3_prepass.nugatory_crossing_moves}"
+                    ),
+                )
+                if r3_prepass.found:
+                    output.code = _canonical_output_code(r3_prepass.code)
+                    output.crossingless_components = r3_prepass.crossingless_components
+                    output.reidemeister_i_moves += r3_prepass.reidemeister_i_moves
+                    output.reidemeister_ii_moves += r3_prepass.reidemeister_ii_moves
+                    output.reidemeister_iii_moves += r3_prepass.reidemeister_iii_moves
+                    output.nugatory_crossing_moves += r3_prepass.nugatory_crossing_moves
+                    continue
+
             output.last_path_search_mode = _search_mode(max_paths, ban_heuristic)
             _emit_progress(
                 verbose,
