@@ -97,6 +97,7 @@ struct PDSimplificationResult {
     PDCode code;
     std::size_t crossingless_components = 0;
     int reidemeister_i_moves = 0;
+    int reidemeister_ii_moves = 0;
     int nugatory_crossing_moves = 0;
 };
 
@@ -122,6 +123,8 @@ struct ReductionResult {
     int mid_simplification_rounds = 0;
     int heuristic_failover_rounds = 0;
     int reidemeister_i_moves = 0;
+    int reidemeister_ii_moves = 0;
+    int reidemeister_iii_moves = 0;
     int nugatory_crossing_moves = 0;
     std::size_t tested_red_paths = 0;
     std::size_t tested_green_paths = 0;

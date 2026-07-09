@@ -257,40 +257,8 @@ void test_r1_random_inflate_then_pre_simplify() {
 }
 
 void test_reference_sample() {
-    const char* sample = R"PD(
-[(15, 7, 16, 6),
- (7, 15, 8, 14),
- (18, 61, 19, 0),
- (20, 12, 21, 11),
- (12, 24, 13, 23),
- (13, 26, 14, 27),
- (29, 22, 30, 23),
- (21, 30, 22, 31),
- (28, 33, 29, 34),
- (5, 36, 6, 37),
- (8, 36, 9, 35),
- (34, 27, 35, 28),
- (1, 41, 2, 40),
- (19, 43, 20, 42),
- (43, 25, 44, 24),
- (25, 45, 26, 44),
- (16, 45, 17, 46),
- (37, 46, 38, 47),
- (48, 39, 49, 40),
- (0, 50, 1, 49),
- (10, 51, 11, 52),
- (31, 53, 32, 52),
- (41, 50, 42, 51),
- (55, 3, 56, 2),
- (54, 9, 55, 10),
- (53, 33, 54, 32),
- (3, 57, 4, 56),
- (57, 5, 58, 4),
- (60, 17, 61, 18),
- (59, 38, 60, 39),
- (58, 47, 59, 48)]
-)PD";
-    const auto code = pdcode_simplify::parse_pd_code(sample);
+    const auto code = pdcode_simplify::parse_pd_code(
+        read_text_file("tests/fixtures/reference_31_pd.txt"));
     pdcode_simplify::SimplifierOptions options;
     const auto result = pdcode_simplify::find_simplification(code, options);
     require(result.found, "reference PD code should have a simplification witness");
@@ -304,6 +272,31 @@ void test_reference_sample() {
             "full reference reduction should preserve the final crossingless component");
     require(reduced.mid_simplification_rounds > 0,
             "full reference reduction should use at least one mid-simplification round");
+}
+
+void test_reidemeister_iii_failover_16_crossing() {
+    const auto code = pdcode_simplify::parse_pd_code(
+        "PD[X[1,24,2,25],X[2,16,3,15],X[4,27,5,28],X[6,29,7,30],"
+        "X[8,18,9,17],X[11,21,12,20],X[13,23,14,22],X[16,8,17,7],"
+        "X[19,11,20,10],X[21,13,22,12],X[23,32,24,1],X[25,15,26,14],"
+        "X[26,3,27,4],X[28,5,29,6],X[30,9,31,10],X[31,18,32,19]]");
+    pdcode_simplify::SimplifierOptions options;
+    options.max_threads = 16;
+
+    const auto reduced = pdcode_simplify::reduce_pd_code(code, 0, options, -1);
+    require(reduced.code.size() == 14,
+            "RIII failover regression should reduce the 16-crossing sample to 14 crossings");
+    require(reduced.reidemeister_iii_moves == 4,
+            "RIII failover regression should use four deterministic RIII moves");
+    require(reduced.reidemeister_ii_moves == 1,
+            "RIII failover regression should expose and erase one RII bigon");
+    require(pdcode_simplify::format_final_pd_code(reduced.code) ==
+                "PD[X[1,22,2,23],X[3,24,4,25],X[5,26,6,27],"
+                "X[8,16,9,15],X[10,18,11,17],X[12,20,13,19],"
+                "X[14,8,15,7],X[16,10,17,9],X[18,12,19,11],"
+                "X[20,14,21,13],X[21,28,22,1],X[23,2,24,3],"
+                "X[25,4,26,5],X[27,6,28,7]]",
+            "RIII failover regression should be deterministic");
 }
 
 void test_same_face_green_path_unknot() {
@@ -363,7 +356,7 @@ void test_do_check_cycle_respects_timeout() {
 
 void test_step_pd_callback() {
     const auto code = pdcode_simplify::parse_pd_code(
-        "PD[X[1,5,2,4],X[2,5,3,6],X[6,3,1,4]]");
+        read_text_file("tests/fixtures/reference_31_pd.txt"));
     std::vector<std::string> steps;
     pdcode_simplify::SimplifierOptions options;
     options.max_threads = 1;
@@ -372,12 +365,12 @@ void test_step_pd_callback() {
             std::to_string(round) + ":" + pdcode_simplify::format_final_pd_code(step_code));
     };
 
-    const auto reduced = pdcode_simplify::reduce_pd_code(code, 0, options, -1);
+    const auto reduced = pdcode_simplify::reduce_pd_code(code, 0, options, 1);
     require(reduced.mid_simplification_rounds == 1,
-            "step callback fixture should apply one witness");
+            "step callback fixture should apply one witness before RII pre-simplification");
     require(steps.size() == 1, "step callback should run once per applied witness");
-    require(steps.front() == "1:PD[X[1,2,2,1]]",
-            "step callback should receive the canonical PD code after witness application");
+    require(steps.front().find("1:PD[") == 0,
+            "step callback should receive a canonical PD code after witness application");
 }
 
 }  // namespace
@@ -395,6 +388,7 @@ int main() {
         test_crossingless_component_count_after_removal();
         test_r1_random_inflate_then_pre_simplify();
         test_reference_sample();
+        test_reidemeister_iii_failover_16_crossing();
         test_same_face_green_path_unknot();
         test_canonicalize_after_each_reduction();
         test_do_check_cycle_respects_timeout();

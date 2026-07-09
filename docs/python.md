@@ -2,9 +2,9 @@
 
 `mid_simplify_v5.py` is a refactored pure Python version of the
 mid-simplification search. It exposes both a Python API and a command-line
-interface. Its CLI and `run_job` helper run pure Python R1-move removal
-followed by pure Python nugatory-crossing removal before the search by
-default.
+interface. Its CLI and `run_job` helper run pure Python R1-move removal, true
+R2-bigon removal, and pure Python nugatory-crossing removal before the search
+by default.
 
 ## Environment
 
@@ -32,7 +32,7 @@ mid-simplification rounds; the default `-1` runs until stable. In heuristic
 mode, a heuristic miss is followed by a brute-force check before the current
 diagram is treated as stable. If brute force finds a witness, the next round
 returns to heuristic mode. Every generated PD code is canonicalized
-immediately after it is produced, including after each R1/nugatory deletion
+immediately after it is produced, including after each local cleanup deletion
 and after every applied witness. Use `--timeout K` to cap each PD-code job at
 `K` seconds; the default `-1` has no timeout. A timed-out job returns the best
 PD code found so far and sets `timed_out` in JSON/text output. Use `--verbose`
@@ -47,8 +47,8 @@ lexicographically.
 
 Use `--show-step-pd` to print `step_pd_code[ROUND]: PD[...]` to stdout after
 each mid-simplification witness is applied and canonicalized, before that
-round's automatic R1/nugatory cleanup. This diagnostic output is disabled by
-default because it can be large and shares stdout with JSON/text results.
+round's automatic local cleanup. This diagnostic output is disabled by default
+because it can be large and shares stdout with JSON/text results.
 Use `--log-file FILEPATH` to tee stdout and stderr into a flushed backup log
 file while keeping the normal terminal output unchanged.
 

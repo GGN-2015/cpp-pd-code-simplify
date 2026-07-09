@@ -9,7 +9,10 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from poetry.core.masonry import api as poetry_api
+try:
+    from poetry.core.masonry import api as build_api
+except ImportError:
+    from setuptools import build_meta as build_api
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -204,17 +207,17 @@ def _rewrite_sdist_with_sources(sdist_path: Path) -> None:
 
 
 def get_requires_for_build_wheel(config_settings=None):
-    return poetry_api.get_requires_for_build_wheel(config_settings)
+    return build_api.get_requires_for_build_wheel(config_settings)
 
 
 def get_requires_for_build_sdist(config_settings=None):
-    return poetry_api.get_requires_for_build_sdist(config_settings)
+    return build_api.get_requires_for_build_sdist(config_settings)
 
 
 def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
     _sync_cpp_sources()
     try:
-        return poetry_api.prepare_metadata_for_build_wheel(metadata_directory, config_settings)
+        return build_api.prepare_metadata_for_build_wheel(metadata_directory, config_settings)
     finally:
         _clean_cpp_sources()
 
@@ -222,7 +225,7 @@ def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     _sync_cpp_sources()
     try:
-        wheel_name = poetry_api.build_wheel(wheel_directory, config_settings, metadata_directory)
+        wheel_name = build_api.build_wheel(wheel_directory, config_settings, metadata_directory)
         final_path = _rewrite_wheel_with_sources(Path(wheel_directory) / wheel_name)
         return final_path.name
     finally:
@@ -232,7 +235,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
 def build_sdist(sdist_directory, config_settings=None):
     _sync_cpp_sources()
     try:
-        sdist_name = poetry_api.build_sdist(sdist_directory, config_settings)
+        sdist_name = build_api.build_sdist(sdist_directory, config_settings)
         _rewrite_sdist_with_sources(Path(sdist_directory) / sdist_name)
         return sdist_name
     finally:

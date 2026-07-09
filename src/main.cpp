@@ -415,13 +415,21 @@ void print_component_counts(const pdcode_simplify::ComponentAnalysis& analysis, 
               << analysis.total_components() << '\n';
 }
 
+bool has_simplification(const pdcode_simplify::ReductionResult& result) {
+    return result.mid_simplification_rounds > 0 ||
+           result.reidemeister_i_moves > 0 ||
+           result.reidemeister_ii_moves > 0 ||
+           result.reidemeister_iii_moves > 0 ||
+           result.nugatory_crossing_moves > 0;
+}
+
 void print_text_result(
     const pdcode_simplify::ReductionResult& result,
     const pdcode_simplify::ComponentAnalysis& input_components,
     const pdcode_simplify::ComponentAnalysis& final_components,
     const pdcode_simplify::ComponentAnalysis* after_removal_components) {
     std::cout << "simplification_found: "
-              << (result.mid_simplification_rounds > 0 ? "yes" : "no") << '\n';
+              << (has_simplification(result) ? "yes" : "no") << '\n';
     print_component_counts(input_components, "input");
     if (after_removal_components != nullptr) {
         print_component_counts(*after_removal_components, "after_removal");
@@ -432,6 +440,8 @@ void print_text_result(
     std::cout << "mid_simplification_rounds: " << result.mid_simplification_rounds << '\n';
     std::cout << "heuristic_failover_rounds: " << result.heuristic_failover_rounds << '\n';
     std::cout << "reidemeister_i_moves: " << result.reidemeister_i_moves << '\n';
+    std::cout << "reidemeister_ii_moves: " << result.reidemeister_ii_moves << '\n';
+    std::cout << "reidemeister_iii_moves: " << result.reidemeister_iii_moves << '\n';
     std::cout << "nugatory_crossing_moves: " << result.nugatory_crossing_moves << '\n';
     std::cout << "tested_red_paths: " << result.tested_red_paths << '\n';
     std::cout << "tested_green_paths: " << result.tested_green_paths << '\n';
@@ -489,7 +499,7 @@ void print_json_result(
         std::cout << "  \"label\": \"" << json_escape(*label) << "\",\n";
     }
     std::cout << "  \"simplification_found\": "
-              << (result.mid_simplification_rounds > 0 ? "true" : "false") << ",\n";
+              << (has_simplification(result) ? "true" : "false") << ",\n";
     std::cout << "  \"input_components\": {";
     print_json_component_counts(input_components);
     std::cout << "},\n";
@@ -509,6 +519,8 @@ void print_json_result(
     std::cout << "  \"heuristic_failover_rounds\": "
               << result.heuristic_failover_rounds << ",\n";
     std::cout << "  \"reidemeister_i_moves\": " << result.reidemeister_i_moves << ",\n";
+    std::cout << "  \"reidemeister_ii_moves\": " << result.reidemeister_ii_moves << ",\n";
+    std::cout << "  \"reidemeister_iii_moves\": " << result.reidemeister_iii_moves << ",\n";
     std::cout << "  \"nugatory_crossing_moves\": "
               << result.nugatory_crossing_moves << ",\n";
     std::cout << "  \"tested_red_paths\": " << result.tested_red_paths << ",\n";

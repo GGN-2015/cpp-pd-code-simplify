@@ -15,8 +15,8 @@ data directory, injects those files into the wheel and sdist, and then removes
 the temporary copies from the working tree.
 
 The interface uses the C++ library's default preprocessing pipeline: R1-move
-removal followed by nugatory-crossing removal before the mid-simplification
-search.
+removal, true R2-bigon removal, and nugatory-crossing removal before the
+mid-simplification search.
 
 ## Install
 
@@ -90,9 +90,8 @@ flushed backup log file.
 
 Pass `show_step_pd=True`, or use CLI flag `--show-step-pd`, to print
 `step_pd_code[ROUND]: PD[...]` to stdout after each mid-simplification witness
-is applied and canonicalized, before that round's automatic R1/nugatory
-cleanup. This is a diagnostic stream and is disabled by default because it can
-be large.
+is applied and canonicalized, before that round's automatic local cleanup.
+This is a diagnostic stream and is disabled by default because it can be large.
 
 Batch use:
 

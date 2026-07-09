@@ -42,10 +42,15 @@ which diagram strand each dual edge crosses.
 ## PD Preprocessing
 
 The command-line tools and high-level Python helpers first simplify the PD
-code by removing R1 moves and then nugatory crossings. The C++ implementation
-does this in C++; the Python prototype implements the same preprocessing in
-Python. Both versions update the explicit crossingless-component count when a
-deleted crossing was the last crossing of a component.
+code by repeatedly removing R1 moves, true Reidemeister-II bigons, and
+nugatory crossings. A nugatory crossing is not treated as an R2 move: the R2
+detector specifically looks for two adjacent crossings joined by the two sides
+of a removable bigon, while the nugatory detector removes a single crossing
+whose deletion disconnects the crossing graph in the required way. The C++
+implementation does this in C++; the Python prototype implements the same
+preprocessing in Python. Both versions update the explicit
+crossingless-component count when deleted crossings were the last crossings of
+a component.
 
 The lower-level `find_simplification` function still searches exactly the PD
 code it receives. This keeps the mid-simplification search independently
@@ -143,13 +148,13 @@ witness to produce a new PD code:
 - the resulting half-edge pairing is checked so every active PD label has
   exactly two ends, then labels are renumbered deterministically.
 
-After applying one witness, the implementation immediately runs the same R1
-and nugatory preprocessing again. This can expose additional local
+After applying one witness, the implementation immediately runs the same R1,
+R2, and nugatory preprocessing again. This can expose additional local
 simplifications before the next mid-simplification search round.
 
 `--reduction-round K` caps the number of applied mid-simplification rounds.
 After every operation that produces a new PD code, including an applied
-mid-simplification witness and each R1/nugatory deletion, the implementation
+mid-simplification witness and each local cleanup deletion, the implementation
 immediately rebuilds the internal state from the canonical output form. This
 canonicalization relabels each component from 1, sorts crossings, and rotates
 each crossing so the displayed row starts at the under-incoming strand. It is
@@ -160,8 +165,42 @@ The default `--reduction-round -1` repeats until no applicable witness remains.
 In default heuristic mode, if the heuristic cannot find a witness, the
 simplifier runs a brute-force pass from the already-canonical current diagram.
 If brute force finds a witness, that witness is applied, canonicalized, and the
-loop continues in heuristic mode. The diagram is reported as final only when
-the brute-force pass also fails to find a witness.
+loop continues in heuristic mode. If brute force also fails, the deterministic
+RIII failover described below is tried before the diagram is reported as final.
+
+## Deterministic RIII Failover
+
+Some diagrams cannot be reduced by the current red-green witness search from
+their present crossing order, even though crossing-preserving Reidemeister-III
+moves can expose a later R2 bigon. The 16-crossing regression fixture
+
+```text
+PD[X[1,24,2,25],X[2,16,3,15],X[4,27,5,28],X[6,29,7,30],
+X[8,18,9,17],X[11,21,12,20],X[13,23,14,22],X[16,8,17,7],
+X[19,11,20,10],X[21,13,22,12],X[23,32,24,1],X[25,15,26,14],
+X[26,3,27,4],X[28,5,29,6],X[30,9,31,10],X[31,18,32,19]]
+```
+
+has exactly this shape: the witness search and brute-force green-path search
+find no immediate crossing-decreasing disk, but four RIII moves expose one R2
+bigon and reduce it to 14 crossings.
+
+The failover is deterministic and shared by C++ and Python:
+
+- enumerate triangular faces in the current face decomposition;
+- keep only triangles incident to three distinct crossings and with the local
+  strand parity pattern required for an RIII move;
+- sort candidate RIII moves by crossing index and strand index;
+- run a breadth-first search over canonicalized diagrams, bounded by a fixed
+  depth and state limit;
+- after every RIII move, run the same R1/R2/nugatory preprocessing;
+- accept the first canonical state whose crossing count is lower than the
+  starting state.
+
+No random choice is made. The Python C++ interface calls the same native C++
+backend, so it inherits the same move ordering and the same output. If the
+failover lowers the crossing count, the main simplification loop starts over
+from heuristic witness search on the new canonical PD code.
 
 ## Component Accounting
 
@@ -176,8 +215,8 @@ The library therefore tracks component metadata separately:
 - `analyze_components_after_removing_crossings` simulates crossing deletion
   and increments `crossingless_components` for each component that loses all
   crossing indices;
-- `simplify_pd_code` preserves this count while removing R1 moves and
-  nugatory crossings before the mid-simplification search.
+- `simplify_pd_code` preserves this count while removing R1 moves, true R2
+  bigons, and nugatory crossings before the mid-simplification search.
 
 This makes deletion-safe simplification possible even when the resulting PD
 code is empty.
@@ -226,6 +265,12 @@ candidate ordering and sampling. It can miss a witness; it cannot make an
 unvalidated witness valid. Use `--ban-heuristic --max-paths -1` for complete
 green-path enumeration on inputs where that cost is acceptable.
 
+The RIII failover is sound because each RIII step rewires only the six boundary
+arcs of a triangular face according to the standard Reidemeister-III local
+move. It preserves the crossing count and link type. The subsequent R1, R2,
+and nugatory deletions are local Reidemeister or nugatory simplifications, and
+the same half-edge pairing checks used elsewhere reject invalid rewrites.
+
 The component accounting is correct because a component is represented by
 the set of crossings visited while walking `next` along that component.
 After deleting a crossing set, a component has no crossing-bearing
@@ -239,8 +284,8 @@ The test suite includes deterministic randomized tests for trefoil,
 figure-eight, and cinquefoil fixtures. For each fixture, the test generator
 applies inverse Reidemeister I moves to increase the crossing count without
 changing the link type. The default preprocessing stage must then reduce the
-diagram back to the original crossing count by removing R1 moves and any
-nugatory crossings it exposes.
+diagram back to the original crossing count by removing R1 moves, R2 bigons,
+and any nugatory crossings it exposes.
 
 These tests do not prove minimality for arbitrary input. They do verify that
 the implementation can survive nontrivial random diagram growth while

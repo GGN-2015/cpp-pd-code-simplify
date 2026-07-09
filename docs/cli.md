@@ -113,7 +113,7 @@ legacy bounded path collector is used.
 `--reduction-round -1` is the default. It repeatedly applies valid
 mid-simplification witnesses. Use `--reduction-round K` to cap the number of
 applied mid-simplification rounds. Every generated PD code is canonicalized
-immediately after it is produced, including after each R1/nugatory deletion
+immediately after it is produced, including after each local cleanup deletion
 and after every applied witness. In heuristic mode, whenever the heuristic
 cannot find an applicable path before the round cap is exhausted, the
 executable runs a brute-force enumeration pass. If brute force finds a
@@ -133,7 +133,7 @@ output include `timed_out`; in batch mode, later jobs continue. Pressing
 
 `--show-step-pd` prints `step_pd_code[ROUND]: PD[...]` immediately after each
 mid-simplification witness is applied and canonicalized, before the automatic
-R1/nugatory cleanup for that round. In batch mode the line is prefixed with
+local cleanup for that round. In batch mode the line is prefixed with
 the input label. This diagnostic output uses stdout and is therefore
 intentionally off by default, especially when `--json` output will be parsed
 by another program.
@@ -158,7 +158,8 @@ components would become crossingless:
 pd_simplify --remove-crossings 0,1,2 --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 ```
 
-R1-move removal followed by nugatory-crossing removal is enabled by default.
+R1-move removal, true R2-bigon removal, and nugatory-crossing removal are
+enabled by default.
 Batch mode keeps going after a single input fails; failed items are reported
 with an `error` field in JSON output or an `error:` line in text output.
 
@@ -181,7 +182,7 @@ std::cout << pdcode_simplify::format_final_pd_code(result.code) << "\n";
 
 The library also includes deterministic crossing-increasing helpers. Set
 `type_ii_percentage` to zero when you specifically want to test the default
-R1+nugatory preprocessing stage:
+R1-focused preprocessing stage:
 
 ```cpp
 pdcode_simplify::RandomInflationOptions options;

@@ -13,7 +13,7 @@ It also includes a PyPI-ready Python C++ interface package documented in
 
 The differential test runner compares their JSON outputs exactly. Both
 implementations use the default preprocessing pipeline first: R1-move removal,
-then nugatory-crossing removal.
+true R2-bigon removal, then nugatory-crossing removal.
 
 ```sh
 .\.venv\Scripts\python tools\compare_cpp_python.py ^

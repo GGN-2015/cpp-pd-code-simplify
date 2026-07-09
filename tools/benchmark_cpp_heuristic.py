@@ -162,6 +162,8 @@ def benchmark(
                     "tested_green_paths": int(payload.get("tested_green_paths", 0)),
                     "mid_simplification_rounds": int(payload.get("mid_simplification_rounds", 0)),
                     "heuristic_failover_rounds": int(payload.get("heuristic_failover_rounds", 0)),
+                    "reidemeister_ii_moves": int(payload.get("reidemeister_ii_moves", 0)),
+                    "reidemeister_iii_moves": int(payload.get("reidemeister_iii_moves", 0)),
                     "last_path_search_mode": str(payload.get("last_path_search_mode", "")),
                 }
                 rows.append(row)
@@ -369,6 +371,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "tested_green_paths",
                 "mid_simplification_rounds",
                 "heuristic_failover_rounds",
+                "reidemeister_ii_moves",
+                "reidemeister_iii_moves",
                 "last_path_search_mode",
             ],
         )

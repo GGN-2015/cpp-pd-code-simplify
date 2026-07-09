@@ -1,6 +1,6 @@
 [project]
 name = "cpp-pd-code-simplify-interface"
-version = "0.1.20"
+version = "0.1.21"
 description = "Python interface for cpp-pd-code-simplify with runtime C++ compilation."
 authors = [
     {name = "GGN_2015", email = "neko@jlulug.org"}
@@ -26,6 +26,9 @@ include = [
     { path = "build_backend/cpp_pd_code_simplify_interface_build_backend.py", format = ["sdist"] },
     { path = "cpp_pd_code_simplify_interface/data/src/native_interface.cpp", format = ["sdist", "wheel"] }
 ]
+
+[tool.setuptools.packages.find]
+include = ["cpp_pd_code_simplify_interface*"]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0", "setuptools>=61"]

@@ -26,8 +26,9 @@ this subproject. The custom Poetry build backend syncs them from the repository
 root during `poetry build`, embeds them in the wheel and sdist, then removes the
 temporary copies from the working tree.
 
-Calls use the C++ library's default preprocessing pipeline: R1-move removal
-followed by nugatory-crossing removal, then iterative mid-simplification.
+Calls use the C++ library's default preprocessing pipeline: R1-move removal,
+true R2-bigon removal, and nugatory-crossing removal, then iterative
+mid-simplification.
 
 ## Example
 
@@ -61,8 +62,7 @@ the C++ backend for that phase. The backend call runs in a helper process, so
 flushed backup log file.
 Use `show_step_pd=True`, or CLI flag `--show-step-pd`, to print
 `step_pd_code[ROUND]: PD[...]` to stdout after each mid-simplification witness
-is applied and canonicalized, before that round's automatic R1/nugatory
-cleanup.
+is applied and canonicalized, before that round's automatic local cleanup.
 
 Batch use:
 

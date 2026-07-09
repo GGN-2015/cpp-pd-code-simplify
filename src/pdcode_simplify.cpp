@@ -29,6 +29,8 @@ constexpr int kHeuristicMinStateBudget = 128;
 constexpr int kHeuristicMaxStateBudget = 4096;
 constexpr int kHeuristicMinPathBudget = 24;
 constexpr int kHeuristicMaxPathBudget = 384;
+constexpr int kR3FailoverMaxDepth = 8;
+constexpr int kR3FailoverMaxStates = 4096;
 
 int positive_mod(int value, int modulus) {
     int result = value % modulus;
@@ -461,6 +463,86 @@ PDCode erase_one_nugatory_crossing(
     crossingless_components = after_removal.crossingless_components;
     ++moves;
     return canonical_output_code(renumber_full_dfs(code));
+}
+
+std::vector<int> endpoint_pairing(const PDCode& code) {
+    const int endpoint_count = static_cast<int>(code.size() * 4);
+    std::vector<int> pairing(endpoint_count, -1);
+    const LabelMap labels = build_label_map(code);
+    for (const auto& item : labels) {
+        const Endpoint first = item.second[0];
+        const Endpoint second = item.second[1];
+        const int first_key = endpoint_key(first);
+        const int second_key = endpoint_key(second);
+        pairing[first_key] = second_key;
+        pairing[second_key] = first_key;
+    }
+    return pairing;
+}
+
+void assign_pair(std::vector<int>& pairing, int first, int second) {
+    if (first < 0 || second < 0 ||
+        first >= static_cast<int>(pairing.size()) ||
+        second >= static_cast<int>(pairing.size())) {
+        throw std::out_of_range("Endpoint pairing assignment is out of range");
+    }
+    if (first == second) {
+        throw std::runtime_error("Endpoint pairing assignment created a self-pair");
+    }
+    pairing[first] = second;
+    pairing[second] = first;
+}
+
+PDCode code_from_endpoint_pairing(
+    const std::vector<int>& pairing,
+    int crossing_count,
+    const std::set<int>& removed_crossings = std::set<int>()) {
+    const int endpoint_count = crossing_count * 4;
+    std::vector<char> active(endpoint_count, false);
+    for (int crossing = 0; crossing < crossing_count; ++crossing) {
+        if (removed_crossings.count(crossing) != 0) {
+            continue;
+        }
+        for (int strand = 0; strand < 4; ++strand) {
+            active[endpoint_key(Endpoint{crossing, strand})] = true;
+        }
+    }
+
+    std::vector<int> label_by_endpoint(endpoint_count, -1);
+    std::vector<char> seen(endpoint_count, false);
+    int next_label = 0;
+    for (int endpoint = 0; endpoint < endpoint_count; ++endpoint) {
+        if (!active[endpoint] || seen[endpoint]) {
+            continue;
+        }
+        const int mate = pairing.at(endpoint);
+        if (mate < 0 || mate >= endpoint_count || !active[mate] || pairing.at(mate) != endpoint) {
+            throw std::runtime_error("Endpoint rewrite produced a broken PD edge");
+        }
+        seen[endpoint] = true;
+        seen[mate] = true;
+        label_by_endpoint[endpoint] = next_label;
+        label_by_endpoint[mate] = next_label;
+        ++next_label;
+    }
+
+    PDCode output;
+    output.reserve(static_cast<std::size_t>(crossing_count - removed_crossings.size()));
+    for (int crossing = 0; crossing < crossing_count; ++crossing) {
+        if (removed_crossings.count(crossing) != 0) {
+            continue;
+        }
+        Crossing rewritten{};
+        for (int strand = 0; strand < 4; ++strand) {
+            const int key = endpoint_key(Endpoint{crossing, strand});
+            if (label_by_endpoint[key] < 0) {
+                throw std::runtime_error("Endpoint rewrite missed an active endpoint");
+            }
+            rewritten[strand] = label_by_endpoint[key];
+        }
+        output.push_back(rewritten);
+    }
+    return canonical_output_code(output);
 }
 
 std::vector<std::vector<int>> raw_faces_from_pd_code(const PDCode& code) {
@@ -896,6 +978,217 @@ private:
         }
     }
 };
+
+struct ReidemeisterIIMove {
+    bool found = false;
+    int first_crossing = -1;
+    int first_strand = -1;
+    int second_crossing = -1;
+    int second_strand = -1;
+};
+
+ReidemeisterIIMove find_reidemeister_ii_move(const PDCode& code) {
+    if (code.size() < 2) {
+        return ReidemeisterIIMove{};
+    }
+    const Diagram diagram(code);
+    for (int crossing = 0; crossing < static_cast<int>(code.size()); ++crossing) {
+        for (int strand = 0; strand < 4; ++strand) {
+            const Endpoint first_neighbor = diagram.crossings[crossing].adjacent[strand];
+            const Endpoint second_neighbor =
+                diagram.crossings[crossing].adjacent[positive_mod(strand + 1, 4)];
+            if (first_neighbor.crossing == crossing ||
+                first_neighbor.crossing != second_neighbor.crossing) {
+                continue;
+            }
+            if (positive_mod(first_neighbor.strand - 1, 4) != second_neighbor.strand) {
+                continue;
+            }
+            if (positive_mod(strand + first_neighbor.strand, 2) != 0) {
+                continue;
+            }
+            ReidemeisterIIMove move;
+            move.found = true;
+            move.first_crossing = crossing;
+            move.first_strand = strand;
+            move.second_crossing = first_neighbor.crossing;
+            move.second_strand = first_neighbor.strand;
+            return move;
+        }
+    }
+    return ReidemeisterIIMove{};
+}
+
+PDCode erase_one_reidemeister_ii_move(
+    const PDCode& code,
+    const ReidemeisterIIMove& move,
+    std::size_t& crossingless_components,
+    int& moves) {
+    if (!move.found) {
+        throw std::invalid_argument("Cannot erase a missing Reidemeister II move");
+    }
+
+    const int crossing_count = static_cast<int>(code.size());
+    std::vector<int> pairing = endpoint_pairing(code);
+    const int a = move.first_crossing;
+    const int b = move.second_crossing;
+    const int strand = move.first_strand;
+    const int other_strand = move.second_strand;
+
+    const int w = pairing.at(endpoint_key(Endpoint{a, positive_mod(strand + 2, 4)}));
+    const int x = pairing.at(endpoint_key(Endpoint{a, positive_mod(strand + 3, 4)}));
+    const int y = pairing.at(endpoint_key(Endpoint{b, positive_mod(other_strand + 1, 4)}));
+    const int z = pairing.at(endpoint_key(Endpoint{b, positive_mod(other_strand + 2, 4)}));
+    assign_pair(pairing, w, z);
+    assign_pair(pairing, x, y);
+
+    const ComponentAnalysis after_removal =
+        analyze_components_after_removing_crossings(
+            code, std::vector<int>{a, b}, crossingless_components);
+    crossingless_components = after_removal.crossingless_components;
+    ++moves;
+
+    std::set<int> removed;
+    removed.insert(a);
+    removed.insert(b);
+    return code_from_endpoint_pairing(pairing, crossing_count, removed);
+}
+
+struct ReidemeisterIIIMove {
+    std::array<Endpoint, 3> corners{};
+};
+
+std::vector<ReidemeisterIIIMove> possible_reidemeister_iii_moves(const PDCode& code) {
+    std::vector<ReidemeisterIIIMove> moves;
+    if (code.size() < 3) {
+        return moves;
+    }
+    const Diagram diagram(code);
+    const DualGraph graph(diagram);
+    std::set<std::array<int, 6>> seen;
+    for (const std::vector<int>& face : graph.faces) {
+        if (face.size() != 3) {
+            continue;
+        }
+        std::array<Endpoint, 3> corners{
+            endpoint_from_key(face[0]),
+            endpoint_from_key(face[1]),
+            endpoint_from_key(face[2])};
+        int parity_sum = 0;
+        for (const Endpoint& endpoint : corners) {
+            parity_sum += positive_mod(endpoint.strand, 2);
+        }
+        if (parity_sum != 1 && parity_sum != 2) {
+            continue;
+        }
+        for (int rotate = 0; rotate < 3; ++rotate) {
+            if (positive_mod(corners[1].strand, 2) == 0 &&
+                positive_mod(corners[2].strand, 2) == 1) {
+                break;
+            }
+            std::rotate(corners.begin(), corners.begin() + 1, corners.end());
+        }
+        if (positive_mod(corners[1].strand, 2) != 0 ||
+            positive_mod(corners[2].strand, 2) != 1) {
+            continue;
+        }
+        std::set<int> crossing_set;
+        for (const Endpoint& endpoint : corners) {
+            crossing_set.insert(endpoint.crossing);
+        }
+        if (crossing_set.size() != 3) {
+            continue;
+        }
+        std::array<int, 6> key{};
+        for (int i = 0; i < 3; ++i) {
+            key[2 * i] = corners[i].crossing;
+            key[2 * i + 1] = corners[i].strand;
+        }
+        if (!seen.insert(key).second) {
+            continue;
+        }
+        ReidemeisterIIIMove move;
+        move.corners = corners;
+        moves.push_back(move);
+    }
+    std::sort(moves.begin(), moves.end(), [](const ReidemeisterIIIMove& lhs, const ReidemeisterIIIMove& rhs) {
+        for (int i = 0; i < 3; ++i) {
+            if (lhs.corners[i].crossing != rhs.corners[i].crossing) {
+                return lhs.corners[i].crossing < rhs.corners[i].crossing;
+            }
+            if (lhs.corners[i].strand != rhs.corners[i].strand) {
+                return lhs.corners[i].strand < rhs.corners[i].strand;
+            }
+        }
+        return false;
+    });
+    return moves;
+}
+
+PDCode apply_reidemeister_iii_move(const PDCode& code, const ReidemeisterIIIMove& move) {
+    const int crossing_count = static_cast<int>(code.size());
+    const int endpoint_count = crossing_count * 4;
+    std::vector<int> pairing = endpoint_pairing(code);
+    pairing.resize(static_cast<std::size_t>(endpoint_count + 12), -1);
+
+    const Endpoint A = move.corners[0];
+    const Endpoint B = move.corners[1];
+    const Endpoint C = move.corners[2];
+    const std::array<Endpoint, 6> old_border{
+        Endpoint{C.crossing, positive_mod(C.strand - 1, 4)},
+        Endpoint{C.crossing, positive_mod(C.strand - 2, 4)},
+        Endpoint{A.crossing, positive_mod(A.strand - 1, 4)},
+        Endpoint{A.crossing, positive_mod(A.strand - 2, 4)},
+        Endpoint{B.crossing, positive_mod(B.strand - 1, 4)},
+        Endpoint{B.crossing, positive_mod(B.strand - 2, 4)}};
+
+    std::array<std::array<int, 2>, 6> temporary{};
+    for (int i = 0; i < 6; ++i) {
+        const int border = endpoint_key(old_border[i]);
+        const int mate = pairing.at(border);
+        const int first_temp = endpoint_count + 2 * i;
+        const int second_temp = first_temp + 1;
+        temporary[i] = std::array<int, 2>{first_temp, second_temp};
+        assign_pair(pairing, first_temp, border);
+        assign_pair(pairing, second_temp, mate);
+    }
+
+    const std::array<Endpoint, 6> new_border{
+        Endpoint{A.crossing, positive_mod(A.strand, 4)},
+        Endpoint{B.crossing, positive_mod(B.strand + 1, 4)},
+        Endpoint{B.crossing, positive_mod(B.strand, 4)},
+        Endpoint{C.crossing, positive_mod(C.strand + 1, 4)},
+        Endpoint{C.crossing, positive_mod(C.strand, 4)},
+        Endpoint{A.crossing, positive_mod(A.strand + 1, 4)}};
+    for (int i = 0; i < 6; ++i) {
+        assign_pair(pairing, endpoint_key(new_border[i]), temporary[i][0]);
+    }
+
+    assign_pair(
+        pairing,
+        endpoint_key(Endpoint{A.crossing, positive_mod(A.strand - 1, 4)}),
+        endpoint_key(Endpoint{B.crossing, positive_mod(B.strand + 2, 4)}));
+    assign_pair(
+        pairing,
+        endpoint_key(Endpoint{B.crossing, positive_mod(B.strand - 1, 4)}),
+        endpoint_key(Endpoint{C.crossing, positive_mod(C.strand + 2, 4)}));
+    assign_pair(
+        pairing,
+        endpoint_key(Endpoint{C.crossing, positive_mod(C.strand - 1, 4)}),
+        endpoint_key(Endpoint{A.crossing, positive_mod(A.strand + 2, 4)}));
+
+    for (const auto& temp : temporary) {
+        const int first = temp[0];
+        const int second = temp[1];
+        const int first_mate = pairing.at(first);
+        const int second_mate = pairing.at(second);
+        assign_pair(pairing, first_mate, second_mate);
+        pairing[first] = -1;
+        pairing[second] = -1;
+    }
+    pairing.resize(static_cast<std::size_t>(endpoint_count));
+    return code_from_endpoint_pairing(pairing, crossing_count);
+}
 
 enum class Level {
     Under,
@@ -2209,12 +2502,26 @@ PDSimplificationResult simplify_pd_code(
     result.code = canonical_output_code(code);
     result.crossingless_components = known_crossingless_components;
 
-    result.code = erase_r1_moves(
-        result.code,
-        result.crossingless_components,
-        result.reidemeister_i_moves);
-
     while (true) {
+        const int r1_before = result.reidemeister_i_moves;
+        result.code = erase_r1_moves(
+            result.code,
+            result.crossingless_components,
+            result.reidemeister_i_moves);
+        if (result.reidemeister_i_moves != r1_before) {
+            continue;
+        }
+
+        const ReidemeisterIIMove r2_move = find_reidemeister_ii_move(result.code);
+        if (r2_move.found) {
+            result.code = erase_one_reidemeister_ii_move(
+                result.code,
+                r2_move,
+                result.crossingless_components,
+                result.reidemeister_ii_moves);
+            continue;
+        }
+
         const int crossing_index = find_nugatory_crossing(result.code);
         if (crossing_index < 0) {
             break;
@@ -2224,6 +2531,89 @@ PDSimplificationResult simplify_pd_code(
             crossing_index,
             result.crossingless_components,
             result.nugatory_crossing_moves);
+    }
+
+    return result;
+}
+
+struct ReidemeisterIIIFailoverResult {
+    bool found = false;
+    PDCode code;
+    std::size_t crossingless_components = 0;
+    int depth = 0;
+    int visited_states = 0;
+    int reidemeister_i_moves = 0;
+    int reidemeister_ii_moves = 0;
+    int reidemeister_iii_moves = 0;
+    int nugatory_crossing_moves = 0;
+};
+
+ReidemeisterIIIFailoverResult find_reidemeister_iii_failover(
+    const PDCode& code,
+    std::size_t crossingless_components,
+    const SimplifierOptions& options) {
+    check_timeout(options);
+    ReidemeisterIIIFailoverResult result;
+    result.code = code;
+    result.crossingless_components = crossingless_components;
+    const std::size_t target_crossings = code.size();
+    if (target_crossings < 3) {
+        return result;
+    }
+
+    struct State {
+        PDCode code;
+        std::size_t crossingless_components = 0;
+        int depth = 0;
+    };
+
+    std::deque<State> queue;
+    queue.push_back(State{code, crossingless_components, 0});
+    std::set<std::string> seen;
+    seen.insert(format_final_pd_code(code));
+
+    while (!queue.empty() && static_cast<int>(seen.size()) <= kR3FailoverMaxStates) {
+        check_timeout(options);
+        const State state = queue.front();
+        queue.pop_front();
+        ++result.visited_states;
+        if (state.depth >= kR3FailoverMaxDepth) {
+            continue;
+        }
+
+        const std::vector<ReidemeisterIIIMove> moves =
+            possible_reidemeister_iii_moves(state.code);
+        for (const ReidemeisterIIIMove& move : moves) {
+            check_timeout(options);
+            const PDCode moved = apply_reidemeister_iii_move(state.code, move);
+            PDSimplificationResult simplified =
+                simplify_pd_code(moved, state.crossingless_components);
+            if (simplified.code.size() < target_crossings) {
+                result.found = true;
+                result.code = canonical_output_code(simplified.code);
+                result.crossingless_components = simplified.crossingless_components;
+                result.depth = state.depth + 1;
+                result.reidemeister_i_moves = simplified.reidemeister_i_moves;
+                result.reidemeister_ii_moves = simplified.reidemeister_ii_moves;
+                result.reidemeister_iii_moves = state.depth + 1;
+                result.nugatory_crossing_moves = simplified.nugatory_crossing_moves;
+                return result;
+            }
+            if (simplified.code.size() != target_crossings) {
+                continue;
+            }
+
+            const std::string key = format_final_pd_code(simplified.code);
+            if (seen.insert(key).second) {
+                queue.push_back(State{
+                    canonical_output_code(simplified.code),
+                    simplified.crossingless_components,
+                    state.depth + 1});
+                if (static_cast<int>(seen.size()) >= kR3FailoverMaxStates) {
+                    break;
+                }
+            }
+        }
     }
 
     return result;
@@ -2591,6 +2981,7 @@ ReductionResult reduce_pd_code(
         output.code = canonical_output_code(prepared.code);
         output.crossingless_components = prepared.crossingless_components;
         output.reidemeister_i_moves = prepared.reidemeister_i_moves;
+        output.reidemeister_ii_moves = prepared.reidemeister_ii_moves;
         output.nugatory_crossing_moves = prepared.nugatory_crossing_moves;
         check_timeout(run_options);
         {
@@ -2599,6 +2990,7 @@ ReductionResult reduce_pd_code(
                     << " output_crossings=" << output.code.size()
                     << " crossingless_components=" << output.crossingless_components
                     << " r1_moves=" << prepared.reidemeister_i_moves
+                    << " r2_moves=" << prepared.reidemeister_ii_moves
                     << " nugatory_moves=" << prepared.nugatory_crossing_moves;
             emit_progress(run_options, message.str());
         }
@@ -2666,6 +3058,41 @@ ReductionResult reduce_pd_code(
                 {
                     std::ostringstream message;
                     message << "round " << round
+                            << " r3_failover_start crossings=" << output.code.size()
+                            << " max_depth=" << kR3FailoverMaxDepth
+                            << " max_states=" << kR3FailoverMaxStates;
+                    emit_progress(run_options, message.str());
+                }
+                const ReidemeisterIIIFailoverResult r3 =
+                    find_reidemeister_iii_failover(
+                        output.code,
+                        output.crossingless_components,
+                        run_options);
+                {
+                    std::ostringstream message;
+                    message << "round " << round
+                            << " r3_failover_done found=" << (r3.found ? "yes" : "no")
+                            << " depth=" << r3.depth
+                            << " visited_states=" << r3.visited_states
+                            << " final_crossings=" << (r3.found ? r3.code.size() : output.code.size())
+                            << " r1_moves=" << r3.reidemeister_i_moves
+                            << " r2_moves=" << r3.reidemeister_ii_moves
+                            << " r3_moves=" << r3.reidemeister_iii_moves
+                            << " nugatory_moves=" << r3.nugatory_crossing_moves;
+                    emit_progress(run_options, message.str());
+                }
+                if (r3.found) {
+                    output.code = canonical_output_code(r3.code);
+                    output.crossingless_components = r3.crossingless_components;
+                    output.reidemeister_i_moves += r3.reidemeister_i_moves;
+                    output.reidemeister_ii_moves += r3.reidemeister_ii_moves;
+                    output.reidemeister_iii_moves += r3.reidemeister_iii_moves;
+                    output.nugatory_crossing_moves += r3.nugatory_crossing_moves;
+                    continue;
+                }
+                {
+                    std::ostringstream message;
+                    message << "round " << round
                             << " stop_no_path crossings=" << output.code.size();
                     emit_progress(run_options, message.str());
                 }
@@ -2687,6 +3114,7 @@ ReductionResult reduce_pd_code(
             output.code = canonical_output_code(simplified.code);
             output.crossingless_components = simplified.crossingless_components;
             output.reidemeister_i_moves += simplified.reidemeister_i_moves;
+            output.reidemeister_ii_moves += simplified.reidemeister_ii_moves;
             output.nugatory_crossing_moves += simplified.nugatory_crossing_moves;
             check_timeout(run_options);
             {
@@ -2697,6 +3125,7 @@ ReductionResult reduce_pd_code(
                         << " -> " << output.code.size()
                         << " crossingless_components=" << output.crossingless_components
                         << " r1_moves=" << simplified.reidemeister_i_moves
+                        << " r2_moves=" << simplified.reidemeister_ii_moves
                         << " nugatory_moves=" << simplified.nugatory_crossing_moves;
                 emit_progress(run_options, message.str());
             }
@@ -2723,6 +3152,8 @@ ReductionResult reduce_pd_code(
                 << " crossingless_components=" << output.crossingless_components
                 << " mid_rounds=" << output.mid_simplification_rounds
                 << " heuristic_failover_rounds=" << output.heuristic_failover_rounds
+                << " r2_moves=" << output.reidemeister_ii_moves
+                << " r3_moves=" << output.reidemeister_iii_moves
                 << " stopped_by_round_limit="
                 << (output.stopped_by_round_limit ? "yes" : "no")
                 << " timed_out=" << (output.timed_out ? "yes" : "no");

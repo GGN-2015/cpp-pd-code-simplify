@@ -2,9 +2,9 @@
 
 A dependency-free C++14 project for simplifying knot and link planar diagram
 codes. The repository also includes a refactored Python prototype for
-differential testing. User-facing tools first remove R1 moves and nugatory
-crossings, then iteratively find and apply mid-simplification moves until the
-configured round limit is reached or no further move is found.
+differential testing. User-facing tools first remove R1 moves, true R2 bigons,
+and nugatory crossings, then iteratively find and apply mid-simplification
+moves until the configured round limit is reached or no further move is found.
 
 ## Quickstart
 

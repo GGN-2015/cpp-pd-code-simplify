@@ -136,10 +136,16 @@ std::string result_to_json(
     const pdcode_simplify::ComponentAnalysis& input_components,
     const pdcode_simplify::ComponentAnalysis& final_components,
     const pdcode_simplify::ComponentAnalysis* after_removal_components) {
+    const bool simplification_found =
+        result.mid_simplification_rounds > 0 ||
+        result.reidemeister_i_moves > 0 ||
+        result.reidemeister_ii_moves > 0 ||
+        result.reidemeister_iii_moves > 0 ||
+        result.nugatory_crossing_moves > 0;
     std::ostringstream out;
     out << "{";
     out << "\"simplification_found\":"
-        << (result.mid_simplification_rounds > 0 ? "true" : "false") << ",";
+        << (simplification_found ? "true" : "false") << ",";
     out << "\"input_components\":{";
     append_component_counts(out, input_components);
     out << "},";
@@ -157,6 +163,8 @@ std::string result_to_json(
     out << "\"mid_simplification_rounds\":" << result.mid_simplification_rounds << ",";
     out << "\"heuristic_failover_rounds\":" << result.heuristic_failover_rounds << ",";
     out << "\"reidemeister_i_moves\":" << result.reidemeister_i_moves << ",";
+    out << "\"reidemeister_ii_moves\":" << result.reidemeister_ii_moves << ",";
+    out << "\"reidemeister_iii_moves\":" << result.reidemeister_iii_moves << ",";
     out << "\"nugatory_crossing_moves\":" << result.nugatory_crossing_moves << ",";
     out << "\"tested_red_paths\":" << result.tested_red_paths << ",";
     out << "\"tested_green_paths\":" << result.tested_green_paths << ",";

@@ -351,15 +351,29 @@ def _compiler_runtime_path_entries() -> list[pathlib.Path]:
     paths: list[pathlib.Path] = []
     for candidate in candidates:
         path = pathlib.Path(candidate)
-        if path.exists() and path.is_file() and path.parent not in paths:
+        if _is_accessible_file(path) and path.parent not in paths:
             paths.append(path.parent)
             continue
         resolved = shutil.which(candidate)
         if resolved:
             resolved_path = pathlib.Path(resolved)
-            if resolved_path.exists() and resolved_path.parent not in paths:
+            if _is_accessible_file(resolved_path) and resolved_path.parent not in paths:
                 paths.append(resolved_path.parent)
     return paths
+
+
+def _is_accessible_dir(path: pathlib.Path) -> bool:
+    try:
+        return path.exists() and path.is_dir()
+    except OSError:
+        return False
+
+
+def _is_accessible_file(path: pathlib.Path) -> bool:
+    try:
+        return path.exists() and path.is_file()
+    except OSError:
+        return False
 
 
 def _path_entries() -> list[pathlib.Path]:
@@ -368,7 +382,7 @@ def _path_entries() -> list[pathlib.Path]:
         if not entry:
             continue
         path = pathlib.Path(entry)
-        if path.exists() and path.is_dir() and path not in paths:
+        if _is_accessible_dir(path) and path not in paths:
             paths.append(path)
     return paths
 
@@ -377,7 +391,7 @@ def _tool_path(names: Sequence[str], extra_dirs: Sequence[pathlib.Path] = ()) ->
     for directory in extra_dirs:
         for name in names:
             candidate = directory / name
-            if candidate.exists() and candidate.is_file():
+            if _is_accessible_file(candidate):
                 return str(candidate)
     for name in names:
         resolved = shutil.which(name)
@@ -722,6 +736,11 @@ def compile_simplifier(
 ) -> pathlib.Path:
     """Compile the packaged C++ source as a cached dynamic library."""
 
+    if cxx is None:
+        cxx = (
+            os.environ.get("CPP_PD_CODE_SIMPLIFY_INTERFACE_CXX")
+            or os.environ.get("CXX")
+        )
     if cxx:
         cpp_simple_interface.set_gpp_filepath(cxx)
 
@@ -960,6 +979,9 @@ def _run_one(
     env = os.environ.copy()
     project_root = str(pathlib.Path(__file__).resolve().parents[1])
     env["PYTHONPATH"] = project_root + os.pathsep + env.get("PYTHONPATH", "")
+    compiler = cpp_simple_interface.get_gpp_filepath().strip()
+    if compiler:
+        env.setdefault("CPP_PD_CODE_SIMPLIFY_INTERFACE_CXX", compiler)
     try:
         proc = subprocess.Popen(
             [

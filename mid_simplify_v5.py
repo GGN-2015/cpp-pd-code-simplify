@@ -32,6 +32,8 @@ HEURISTIC_MIN_STATE_BUDGET = 128
 HEURISTIC_MAX_STATE_BUDGET = 4096
 HEURISTIC_MIN_PATH_BUDGET = 24
 HEURISTIC_MAX_PATH_BUDGET = 384
+R3_FAILOVER_MAX_DEPTH = 8
+R3_FAILOVER_MAX_STATES = 4096
 
 
 class TeeTextIO:
@@ -251,6 +253,8 @@ class ReductionResult:
     mid_simplification_rounds: int = 0
     heuristic_failover_rounds: int = 0
     reidemeister_i_moves: int = 0
+    reidemeister_ii_moves: int = 0
+    reidemeister_iii_moves: int = 0
     nugatory_crossing_moves: int = 0
     tested_red_paths: int = 0
     tested_green_paths: int = 0
@@ -268,7 +272,13 @@ class ReductionResult:
         data: Dict[str, object] = {}
         if label is not None:
             data["label"] = label
-        data["simplification_found"] = self.mid_simplification_rounds > 0
+        data["simplification_found"] = (
+            self.mid_simplification_rounds > 0
+            or self.reidemeister_i_moves > 0
+            or self.reidemeister_ii_moves > 0
+            or self.reidemeister_iii_moves > 0
+            or self.nugatory_crossing_moves > 0
+        )
         if input_components is not None:
             data["input_components"] = input_components.to_json()
         if after_removal_components is not None:
@@ -284,6 +294,8 @@ class ReductionResult:
             "mid_simplification_rounds": self.mid_simplification_rounds,
             "heuristic_failover_rounds": self.heuristic_failover_rounds,
             "reidemeister_i_moves": self.reidemeister_i_moves,
+            "reidemeister_ii_moves": self.reidemeister_ii_moves,
+            "reidemeister_iii_moves": self.reidemeister_iii_moves,
             "nugatory_crossing_moves": self.nugatory_crossing_moves,
             "tested_red_paths": self.tested_red_paths,
             "tested_green_paths": self.tested_green_paths,
@@ -299,12 +311,14 @@ class PDSimplificationResult:
     code: PDCode
     crossingless_components: int = 0
     reidemeister_i_moves: int = 0
+    reidemeister_ii_moves: int = 0
     nugatory_crossing_moves: int = 0
 
     def to_json(self) -> Dict[str, object]:
         return {
             "enabled": True,
             "reidemeister_i_moves": self.reidemeister_i_moves,
+            "reidemeister_ii_moves": self.reidemeister_ii_moves,
             "nugatory_crossing_moves": self.nugatory_crossing_moves,
             "output_crossings": len(self.code),
         }
@@ -988,6 +1002,219 @@ def erase_one_nugatory_crossing(
     return _canonical_output_code(renumber_full_dfs(result)), after_removal.crossingless_components
 
 
+def endpoint_pairing(code: PDCode) -> List[int]:
+    pairing = [-1 for _ in range(len(code) * 4)]
+    labels: Dict[int, List[int]] = {}
+    for crossing_index, crossing in enumerate(code):
+        for strand, label in enumerate(crossing):
+            labels.setdefault(label, []).append(crossing_index * 4 + strand)
+    for label, endpoints in labels.items():
+        if len(endpoints) != 2:
+            raise ValueError(f"PD label {label} appears {len(endpoints)} times")
+        first, second = endpoints
+        pairing[first] = second
+        pairing[second] = first
+    return pairing
+
+
+def assign_pair(pairing: List[int], first: int, second: int) -> None:
+    if first < 0 or second < 0 or first >= len(pairing) or second >= len(pairing):
+        raise IndexError("Endpoint pairing assignment is out of range")
+    if first == second:
+        raise ValueError("Endpoint pairing assignment created a self-pair")
+    pairing[first] = second
+    pairing[second] = first
+
+
+def code_from_endpoint_pairing(
+    pairing: Sequence[int],
+    crossing_count: int,
+    removed_crossings: Sequence[int] = (),
+) -> PDCode:
+    removed = set(removed_crossings)
+    active = {
+        crossing * 4 + strand
+        for crossing in range(crossing_count)
+        if crossing not in removed
+        for strand in range(4)
+    }
+    label_by_endpoint: Dict[int, int] = {}
+    seen: Set[int] = set()
+    next_label = 0
+    for endpoint in sorted(active):
+        if endpoint in seen:
+            continue
+        mate = pairing[endpoint]
+        if mate not in active or pairing[mate] != endpoint:
+            raise ValueError("Endpoint rewrite produced a broken PD edge")
+        seen.add(endpoint)
+        seen.add(mate)
+        label_by_endpoint[endpoint] = next_label
+        label_by_endpoint[mate] = next_label
+        next_label += 1
+
+    output: PDCode = []
+    for crossing in range(crossing_count):
+        if crossing in removed:
+            continue
+        output.append(tuple(label_by_endpoint[crossing * 4 + strand] for strand in range(4)))
+    return _canonical_output_code(output)
+
+
+@dataclass(frozen=True)
+class ReidemeisterIIMove:
+    first_crossing: int
+    first_strand: int
+    second_crossing: int
+    second_strand: int
+
+
+def find_reidemeister_ii_move(code: PDCode) -> Optional[ReidemeisterIIMove]:
+    if len(code) < 2:
+        return None
+    diagram = Diagram(code)
+    for crossing in range(len(code)):
+        for strand in range(4):
+            first_neighbor = diagram.adjacent[crossing][strand]
+            second_neighbor = diagram.adjacent[crossing][(strand + 1) % 4]
+            if first_neighbor.crossing == crossing:
+                continue
+            if first_neighbor.crossing != second_neighbor.crossing:
+                continue
+            if (first_neighbor.strand - 1) % 4 != second_neighbor.strand:
+                continue
+            if (strand + first_neighbor.strand) % 2 != 0:
+                continue
+            return ReidemeisterIIMove(
+                crossing,
+                strand,
+                first_neighbor.crossing,
+                first_neighbor.strand,
+            )
+    return None
+
+
+def erase_one_reidemeister_ii_move(
+    code: PDCode,
+    move: ReidemeisterIIMove,
+    crossingless_components: int,
+) -> Tuple[PDCode, int]:
+    pairing = endpoint_pairing(code)
+    a = move.first_crossing
+    b = move.second_crossing
+    strand = move.first_strand
+    other_strand = move.second_strand
+    w = pairing[a * 4 + (strand + 2) % 4]
+    x = pairing[a * 4 + (strand + 3) % 4]
+    y = pairing[b * 4 + (other_strand + 1) % 4]
+    z = pairing[b * 4 + (other_strand + 2) % 4]
+    assign_pair(pairing, w, z)
+    assign_pair(pairing, x, y)
+    after_removal = analyze_components_after_removing_crossings(
+        code,
+        [a, b],
+        crossingless_components,
+    )
+    return code_from_endpoint_pairing(pairing, len(code), [a, b]), after_removal.crossingless_components
+
+
+@dataclass(frozen=True)
+class ReidemeisterIIIMove:
+    corners: Tuple[Endpoint, Endpoint, Endpoint]
+
+
+def possible_reidemeister_iii_moves(code: PDCode) -> List[ReidemeisterIIIMove]:
+    if len(code) < 3:
+        return []
+    diagram = Diagram(code)
+    graph = DualGraph(diagram)
+    moves: List[ReidemeisterIIIMove] = []
+    seen: Set[Tuple[Tuple[int, int], Tuple[int, int], Tuple[int, int]]] = set()
+    for face in graph.faces:
+        if len(face) != 3:
+            continue
+        corners = [endpoint_from_key(key) for key in face]
+        parity_sum = sum(endpoint.strand % 2 for endpoint in corners)
+        if parity_sum not in (1, 2):
+            continue
+        for _ in range(3):
+            if corners[1].strand % 2 == 0 and corners[2].strand % 2 == 1:
+                break
+            corners = [corners[1], corners[2], corners[0]]
+        if corners[1].strand % 2 != 0 or corners[2].strand % 2 != 1:
+            continue
+        if len({endpoint.crossing for endpoint in corners}) != 3:
+            continue
+        key = tuple((endpoint.crossing, endpoint.strand) for endpoint in corners)
+        if key in seen:
+            continue
+        seen.add(key)
+        moves.append(ReidemeisterIIIMove(tuple(corners)))  # type: ignore[arg-type]
+    moves.sort(key=lambda move: tuple((endpoint.crossing, endpoint.strand) for endpoint in move.corners))
+    return moves
+
+
+def apply_reidemeister_iii_move(code: PDCode, move: ReidemeisterIIIMove) -> PDCode:
+    crossing_count = len(code)
+    endpoint_count = crossing_count * 4
+    pairing = endpoint_pairing(code)
+    pairing.extend([-1 for _ in range(12)])
+    a_corner, b_corner, c_corner = move.corners
+
+    old_border = [
+        Endpoint(c_corner.crossing, (c_corner.strand - 1) % 4),
+        Endpoint(c_corner.crossing, (c_corner.strand - 2) % 4),
+        Endpoint(a_corner.crossing, (a_corner.strand - 1) % 4),
+        Endpoint(a_corner.crossing, (a_corner.strand - 2) % 4),
+        Endpoint(b_corner.crossing, (b_corner.strand - 1) % 4),
+        Endpoint(b_corner.crossing, (b_corner.strand - 2) % 4),
+    ]
+    temporary: List[Tuple[int, int]] = []
+    for index, endpoint in enumerate(old_border):
+        border = endpoint.key
+        mate = pairing[border]
+        first_temp = endpoint_count + 2 * index
+        second_temp = first_temp + 1
+        temporary.append((first_temp, second_temp))
+        assign_pair(pairing, first_temp, border)
+        assign_pair(pairing, second_temp, mate)
+
+    new_border = [
+        Endpoint(a_corner.crossing, a_corner.strand % 4),
+        Endpoint(b_corner.crossing, (b_corner.strand + 1) % 4),
+        Endpoint(b_corner.crossing, b_corner.strand % 4),
+        Endpoint(c_corner.crossing, (c_corner.strand + 1) % 4),
+        Endpoint(c_corner.crossing, c_corner.strand % 4),
+        Endpoint(a_corner.crossing, (a_corner.strand + 1) % 4),
+    ]
+    for index, endpoint in enumerate(new_border):
+        assign_pair(pairing, endpoint.key, temporary[index][0])
+
+    assign_pair(
+        pairing,
+        Endpoint(a_corner.crossing, (a_corner.strand - 1) % 4).key,
+        Endpoint(b_corner.crossing, (b_corner.strand + 2) % 4).key,
+    )
+    assign_pair(
+        pairing,
+        Endpoint(b_corner.crossing, (b_corner.strand - 1) % 4).key,
+        Endpoint(c_corner.crossing, (c_corner.strand + 2) % 4).key,
+    )
+    assign_pair(
+        pairing,
+        Endpoint(c_corner.crossing, (c_corner.strand - 1) % 4).key,
+        Endpoint(a_corner.crossing, (a_corner.strand + 2) % 4).key,
+    )
+
+    for first_temp, second_temp in temporary:
+        first_mate = pairing[first_temp]
+        second_mate = pairing[second_temp]
+        assign_pair(pairing, first_mate, second_mate)
+        pairing[first_temp] = -1
+        pairing[second_temp] = -1
+    return code_from_endpoint_pairing(pairing[:endpoint_count], crossing_count)
+
+
 def simplify_pd_code(
     code: PDCode,
     known_crossingless_components: int = 0,
@@ -996,11 +1223,25 @@ def simplify_pd_code(
         code=_canonical_output_code([tuple(crossing) for crossing in code]),
         crossingless_components=known_crossingless_components,
     )
-    result.code, result.crossingless_components, result.reidemeister_i_moves = erase_r1_moves(
-        result.code,
-        result.crossingless_components,
-    )
     while True:
+        result.code, result.crossingless_components, r1_delta = erase_r1_moves(
+            result.code,
+            result.crossingless_components,
+        )
+        result.reidemeister_i_moves += r1_delta
+        if r1_delta:
+            continue
+
+        r2_move = find_reidemeister_ii_move(result.code)
+        if r2_move is not None:
+            result.code, result.crossingless_components = erase_one_reidemeister_ii_move(
+                result.code,
+                r2_move,
+                result.crossingless_components,
+            )
+            result.reidemeister_ii_moves += 1
+            continue
+
         index = find_nugatory_crossing(result.code)
         if index < 0:
             break
@@ -1010,6 +1251,77 @@ def simplify_pd_code(
             result.crossingless_components,
         )
         result.nugatory_crossing_moves += 1
+    return result
+
+
+@dataclass
+class ReidemeisterIIIFailoverResult:
+    found: bool = False
+    code: PDCode = field(default_factory=list)
+    crossingless_components: int = 0
+    depth: int = 0
+    visited_states: int = 0
+    reidemeister_i_moves: int = 0
+    reidemeister_ii_moves: int = 0
+    reidemeister_iii_moves: int = 0
+    nugatory_crossing_moves: int = 0
+
+
+def find_reidemeister_iii_failover(
+    code: PDCode,
+    crossingless_components: int,
+    timeout: int = -1,
+    deadline: Optional[float] = None,
+) -> ReidemeisterIIIFailoverResult:
+    check_timeout(timeout, deadline)
+    result = ReidemeisterIIIFailoverResult(
+        code=[tuple(crossing) for crossing in code],
+        crossingless_components=crossingless_components,
+    )
+    target_crossings = len(code)
+    if target_crossings < 3:
+        return result
+
+    queue: Deque[Tuple[PDCode, int, int]] = deque()
+    queue.append(([tuple(crossing) for crossing in code], crossingless_components, 0))
+    seen: Set[str] = {format_final_pd_code(code)}
+
+    while queue and len(seen) <= R3_FAILOVER_MAX_STATES:
+        check_timeout(timeout, deadline)
+        state_code, state_crossingless, depth = queue.popleft()
+        result.visited_states += 1
+        if depth >= R3_FAILOVER_MAX_DEPTH:
+            continue
+
+        for move in possible_reidemeister_iii_moves(state_code):
+            check_timeout(timeout, deadline)
+            moved = apply_reidemeister_iii_move(state_code, move)
+            simplified = simplify_pd_code(moved, state_crossingless)
+            if len(simplified.code) < target_crossings:
+                result.found = True
+                result.code = _canonical_output_code(simplified.code)
+                result.crossingless_components = simplified.crossingless_components
+                result.depth = depth + 1
+                result.reidemeister_i_moves = simplified.reidemeister_i_moves
+                result.reidemeister_ii_moves = simplified.reidemeister_ii_moves
+                result.reidemeister_iii_moves = depth + 1
+                result.nugatory_crossing_moves = simplified.nugatory_crossing_moves
+                return result
+            if len(simplified.code) != target_crossings:
+                continue
+
+            key = format_final_pd_code(simplified.code)
+            if key in seen:
+                continue
+            seen.add(key)
+            queue.append((
+                _canonical_output_code(simplified.code),
+                simplified.crossingless_components,
+                depth + 1,
+            ))
+            if len(seen) >= R3_FAILOVER_MAX_STATES:
+                break
+
     return result
 
 
@@ -2139,6 +2451,7 @@ def reduce_pd_code(
         output.code = _canonical_output_code(prepared.code)
         output.crossingless_components = prepared.crossingless_components
         output.reidemeister_i_moves = prepared.reidemeister_i_moves
+        output.reidemeister_ii_moves = prepared.reidemeister_ii_moves
         output.nugatory_crossing_moves = prepared.nugatory_crossing_moves
         check_timeout(timeout, deadline)
         _emit_progress(
@@ -2149,6 +2462,7 @@ def reduce_pd_code(
                 f"output_crossings={len(output.code)} "
                 f"crossingless_components={output.crossingless_components} "
                 f"r1_moves={prepared.reidemeister_i_moves} "
+                f"r2_moves={prepared.reidemeister_ii_moves} "
                 f"nugatory_moves={prepared.nugatory_crossing_moves}"
             ),
         )
@@ -2237,6 +2551,46 @@ def reduce_pd_code(
                 _emit_progress(
                     verbose,
                     progress,
+                    (
+                        f"round {round_index} r3_failover_start "
+                        f"crossings={len(output.code)} "
+                        f"max_depth={R3_FAILOVER_MAX_DEPTH} "
+                        f"max_states={R3_FAILOVER_MAX_STATES}"
+                    ),
+                )
+                r3 = find_reidemeister_iii_failover(
+                    output.code,
+                    output.crossingless_components,
+                    timeout=timeout,
+                    deadline=deadline,
+                )
+                _emit_progress(
+                    verbose,
+                    progress,
+                    (
+                        f"round {round_index} r3_failover_done "
+                        f"found={'yes' if r3.found else 'no'} "
+                        f"depth={r3.depth} "
+                        f"visited_states={r3.visited_states} "
+                        f"final_crossings={len(r3.code) if r3.found else len(output.code)} "
+                        f"r1_moves={r3.reidemeister_i_moves} "
+                        f"r2_moves={r3.reidemeister_ii_moves} "
+                        f"r3_moves={r3.reidemeister_iii_moves} "
+                        f"nugatory_moves={r3.nugatory_crossing_moves}"
+                    ),
+                )
+                if r3.found:
+                    output.code = _canonical_output_code(r3.code)
+                    output.crossingless_components = r3.crossingless_components
+                    output.reidemeister_i_moves += r3.reidemeister_i_moves
+                    output.reidemeister_ii_moves += r3.reidemeister_ii_moves
+                    output.reidemeister_iii_moves += r3.reidemeister_iii_moves
+                    output.nugatory_crossing_moves += r3.nugatory_crossing_moves
+                    continue
+
+                _emit_progress(
+                    verbose,
+                    progress,
                     f"round {round_index} stop_no_path crossings={len(output.code)}",
                 )
                 break
@@ -2258,6 +2612,7 @@ def reduce_pd_code(
             output.code = _canonical_output_code(prepared.code)
             output.crossingless_components = prepared.crossingless_components
             output.reidemeister_i_moves += prepared.reidemeister_i_moves
+            output.reidemeister_ii_moves += prepared.reidemeister_ii_moves
             output.nugatory_crossing_moves += prepared.nugatory_crossing_moves
             check_timeout(timeout, deadline)
             _emit_progress(
@@ -2268,6 +2623,7 @@ def reduce_pd_code(
                     f"-> {len(reduced_code)} -> {len(output.code)} "
                     f"crossingless_components={output.crossingless_components} "
                     f"r1_moves={prepared.reidemeister_i_moves} "
+                    f"r2_moves={prepared.reidemeister_ii_moves} "
                     f"nugatory_moves={prepared.nugatory_crossing_moves}"
                 ),
             )
@@ -2296,6 +2652,8 @@ def reduce_pd_code(
             f"crossingless_components={output.crossingless_components} "
             f"mid_rounds={output.mid_simplification_rounds} "
             f"heuristic_failover_rounds={output.heuristic_failover_rounds} "
+            f"r2_moves={output.reidemeister_ii_moves} "
+            f"r3_moves={output.reidemeister_iii_moves} "
             f"stopped_by_round_limit={'yes' if output.stopped_by_round_limit else 'no'} "
             f"timed_out={'yes' if output.timed_out else 'no'}"
         ),
@@ -2458,7 +2816,14 @@ def print_text_result(
     after_removal_components: Optional[ComponentAnalysis] = None,
 ) -> None:
     final_components = analyze_components(result.code, result.crossingless_components)
-    print(f"simplification_found: {'yes' if result.mid_simplification_rounds > 0 else 'no'}")
+    simplification_found = (
+        result.mid_simplification_rounds > 0
+        or result.reidemeister_i_moves > 0
+        or result.reidemeister_ii_moves > 0
+        or result.reidemeister_iii_moves > 0
+        or result.nugatory_crossing_moves > 0
+    )
+    print(f"simplification_found: {'yes' if simplification_found else 'no'}")
     print(f"input_components_with_crossings: {input_components.components_with_crossings}")
     print(f"input_crossingless_components: {input_components.crossingless_components}")
     print(f"input_total_components: {input_components.total_components}")
@@ -2480,6 +2845,8 @@ def print_text_result(
     print(f"mid_simplification_rounds: {result.mid_simplification_rounds}")
     print(f"heuristic_failover_rounds: {result.heuristic_failover_rounds}")
     print(f"reidemeister_i_moves: {result.reidemeister_i_moves}")
+    print(f"reidemeister_ii_moves: {result.reidemeister_ii_moves}")
+    print(f"reidemeister_iii_moves: {result.reidemeister_iii_moves}")
     print(f"nugatory_crossing_moves: {result.nugatory_crossing_moves}")
     print(f"tested_red_paths: {result.tested_red_paths}")
     print(f"tested_green_paths: {result.tested_green_paths}")

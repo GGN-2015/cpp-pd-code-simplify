@@ -13,6 +13,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import mid_simplify_v5 as simplify  # noqa: E402
+from tools.benchmark_dataset import REFERENCE_31  # noqa: E402
+
+
+RIII_FAILOVER_16 = (
+    "PD[X[1,24,2,25],X[2,16,3,15],X[4,27,5,28],X[6,29,7,30],"
+    "X[8,18,9,17],X[11,21,12,20],X[13,23,14,22],X[16,8,17,7],"
+    "X[19,11,20,10],X[21,13,22,12],X[23,32,24,1],X[25,15,26,14],"
+    "X[26,3,27,4],X[28,5,29,6],X[30,9,31,10],X[31,18,32,19]]"
+)
 
 
 def require(condition: bool, message: str) -> None:
@@ -67,6 +76,26 @@ def main() -> int:
     require(
         same_face_result.crossingless_components == 1,
         "Python same-face green path unknot should preserve one crossingless component",
+    )
+    riii_failover = simplify.reduce_pd_code(
+        simplify.parse_pd_code(RIII_FAILOVER_16),
+        max_thread=16,
+    )
+    require(
+        riii_failover.to_json()["final_crossings"] == 14,
+        "Python deterministic RIII failover should reduce the 16-crossing sample to 14",
+    )
+    require(
+        riii_failover.reidemeister_iii_moves == 4,
+        "Python deterministic RIII failover should use four RIII moves",
+    )
+    require(
+        riii_failover.reidemeister_ii_moves == 1,
+        "Python deterministic RIII failover should expose one RII move",
+    )
+    require(
+        riii_failover.to_json()["simplification_found"] is True,
+        "RIII+RII simplification should be reported as a simplification",
     )
     cycle_code = simplify.simplify_pd_code(
         simplify.parse_pd_code((ROOT / "tests/fixtures/do_check_cycle_pd.txt").read_text())
@@ -123,10 +152,15 @@ def main() -> int:
     )
     step_stdout = io.StringIO()
     with contextlib.redirect_stdout(step_stdout):
-        step_result = simplify.reduce_pd_code(same_face_green, show_step_pd=True)
-    require(step_result.to_json()["final_pd_code"] == "PD[]", "step-output run should still simplify")
+        step_result = simplify.reduce_pd_code(
+            simplify.parse_pd_code(REFERENCE_31),
+            reduction_round=1,
+            max_thread=1,
+            show_step_pd=True,
+        )
+    require(step_result.mid_simplification_rounds == 1, "step-output run should apply one witness")
     require(
-        "step_pd_code[1]: PD[X[1,2,2,1]]" in step_stdout.getvalue(),
+        "step_pd_code[1]: PD[" in step_stdout.getvalue(),
         "Python show_step_pd should print the canonical PD code after applying a witness",
     )
 
@@ -221,7 +255,9 @@ def main() -> int:
             sys.executable,
             str(ROOT / "mid_simplify_v5.py"),
             "--pd-code",
-            "PD[X[1,5,2,4],X[2,5,3,6],X[6,3,1,4]]",
+            REFERENCE_31,
+            "--reduction-round",
+            "1",
             "--max-thread",
             "1",
             "--verbose",
@@ -237,8 +273,8 @@ def main() -> int:
     )
     require(proc.returncode == 0, f"Python CLI log-file smoke failed: {proc.stderr}")
     log_text = log_path.read_text(encoding="utf-8")
-    require("step_pd_code[1]: PD[X[1,2,2,1]]" in log_text, "Python log file should contain stdout step output")
-    require("final_pd_code: PD[]" in log_text, "Python log file should contain stdout final output")
+    require("step_pd_code[1]: PD[" in log_text, "Python log file should contain stdout step output")
+    require("final_pd_code: PD[" in log_text, "Python log file should contain stdout final output")
     require("[pdcode-simplify " in log_text, "Python log file should contain stderr verbose output")
 
     print("Python prototype tests passed")

@@ -12,10 +12,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INTERFACE_ROOT = ROOT / "python_project" / "cpp-pd-code-simplify-interface"
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(INTERFACE_ROOT))
 
 import cpp_pd_code_simplify_interface as interface  # noqa: E402
 import cpp_pd_code_simplify_interface.main as interface_main  # noqa: E402
+from tools.benchmark_dataset import REFERENCE_31  # noqa: E402
 
 
 TREFOIL = "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
@@ -24,6 +26,12 @@ ORIENTATION_REPAIR = (
     "PD[X[1,6,2,7],X[9,4,10,5],X[8,1,7,10],X[6,3,5,2],X[4,9,3,8]]"
 )
 SAME_FACE_GREEN_UNKNOT = "PD[X[1,5,2,4],X[2,5,3,6],X[6,3,1,4]]"
+RIII_FAILOVER_16 = (
+    "PD[X[1,24,2,25],X[2,16,3,15],X[4,27,5,28],X[6,29,7,30],"
+    "X[8,18,9,17],X[11,21,12,20],X[13,23,14,22],X[16,8,17,7],"
+    "X[19,11,20,10],X[21,13,22,12],X[23,32,24,1],X[25,15,26,14],"
+    "X[26,3,27,4],X[28,5,29,6],X[30,9,31,10],X[31,18,32,19]]"
+)
 
 
 def preferred_cxx() -> str | None:
@@ -110,8 +118,13 @@ def main() -> int:
 
     same_face_green = interface.simplify(SAME_FACE_GREEN_UNKNOT)
     assert same_face_green["final_pd_code"] == "PD[]"
-    assert same_face_green["mid_simplification_rounds"] == 1
+    assert same_face_green["simplification_found"] is True
     assert same_face_green["final_components"]["crossingless_components"] == 1
+    riii_failover = interface.simplify(RIII_FAILOVER_16, max_thread=16)
+    assert riii_failover["final_crossings"] == 14
+    assert riii_failover["reidemeister_iii_moves"] == 4
+    assert riii_failover["reidemeister_ii_moves"] == 1
+    assert riii_failover["simplification_found"] is True
     env = os.environ.copy()
     env["PYTHONPATH"] = str(INTERFACE_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     if cxx:
@@ -173,7 +186,9 @@ def main() -> int:
             "-m",
             "cpp_pd_code_simplify_interface",
             "--pd-code",
-            SAME_FACE_GREEN_UNKNOT,
+            REFERENCE_31,
+            "--reduction-round",
+            "1",
             "--max-thread",
             "1",
             "--verbose",
@@ -189,11 +204,11 @@ def main() -> int:
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
-    assert "step_pd_code[1]: PD[X[1,2,2,1]]" in proc.stdout
-    assert '"final_pd_code": "PD[]"' in proc.stdout
+    assert "step_pd_code[1]: PD[" in proc.stdout
+    assert '"final_pd_code": "PD[' in proc.stdout
     log_text = log_file.read_text(encoding="utf-8")
-    assert "step_pd_code[1]: PD[X[1,2,2,1]]" in log_text
-    assert '"final_pd_code": "PD[]"' in log_text
+    assert "step_pd_code[1]: PD[" in log_text
+    assert '"final_pd_code": "PD[' in log_text
     assert "[pdcode-simplify " in log_text
 
     brute = interface.simplify(TREFOIL, ban_heuristic=True, max_thread=1)

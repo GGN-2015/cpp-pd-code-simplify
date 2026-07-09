@@ -109,9 +109,9 @@ run compares C++ CLI, Python C++ interface, and Python JSON outputs exactly.
 The chart reports average time per PD code and peak RSS for the whole batch.
 
 All three engines run the same default preprocessing pipeline before the
-mid-simplification search: R1-move removal followed by nugatory-crossing
-removal. The Python prototype implements this preprocessing in Python, while
-the Python C++ interface reuses the C++ dynamic library.
+mid-simplification search: R1-move removal, true R2-bigon removal, and
+nugatory-crossing removal. The Python prototype implements this preprocessing
+in Python, while the Python C++ interface reuses the C++ dynamic library.
 
 ## Local Results
 
