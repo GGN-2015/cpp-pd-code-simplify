@@ -30,15 +30,15 @@ The inflated cases preserve the underlying knot type because each added
 crossing is introduced by a reverse type-I Reidemeister move. The fixed seeds
 make the generated PD codes stable across platforms.
 
-Ten `zip_random_*` cases were sampled from the local
+Twenty `zip_random_*` cases were sampled from the local
 `tests/pd_code.zip` corpus supplied during development. The zip itself is
 ignored and is not committed. The committed fixture
 `tests/benchmark_random_pd_codes.txt` stores the sampled PD codes so the
 benchmark remains reproducible without the original archive. The sample uses
 seed `20260708` and source files with at most 150 crossings; the resulting
 cases span 120 to 150 crossings. The active large benchmark intentionally uses
-the first five stored `zip_random_*` cases so strict `--reduction-round -1`
-runs remain reproducible in a practical amount of time.
+the twenty stored `zip_random_*` cases. Runs use batch-mode input so process
+startup is paid once per engine rather than once per PD code.
 
 ## Running
 
@@ -105,8 +105,9 @@ the exact round where a run is spending time.
 
 Each measurement repeat writes the selected cases to one temporary multi-line
 PD-code file, then starts each engine once to process the whole file. The same
-run compares C++ CLI, Python C++ interface, and Python JSON outputs exactly.
-The chart reports average time per PD code and peak RSS for the whole batch.
+batch-mode run compares C++ CLI, Python C++ interface, and Python JSON outputs
+exactly. The chart reports average time per PD code and peak RSS for the whole
+batch.
 
 All three engines run the same default preprocessing pipeline before the
 mid-simplification search: R1-move removal, true R2-bigon removal, and
@@ -119,8 +120,8 @@ The committed charts were generated on the local Windows development machine
 with a local 64-bit MinGW `g++ -O3 -DNDEBUG` C++ executable. The original
 lightweight suite uses `max_paths=-1`, heuristic disabled, and
 `reduction_round=-1`. The zip-random suite uses `max_paths=-1`, heuristic
-enabled, `reduction_round=-1`, `max_thread=16`, and the first five active
-large cases. Each suite was measured with one repeat.
+enabled, `reduction_round=-1`, `max_thread=16`, and twenty active large cases.
+Each suite was measured with one repeat.
 
 Original lightweight suite:
 
@@ -138,9 +139,9 @@ Zip-random large-case suite:
 
 | Engine | Average Time Per PD Code (s) | Average Peak RSS (MiB) |
 | --- | ---: | ---: |
-| C++ CLI | 0.098539 | 4.949 |
-| Python C++ interface | 1.146772 | 57.586 |
-| Python | 0.570628 | 26.023 |
+| C++ CLI | 0.091932 | 5.637 |
+| Python C++ interface | 1.148408 | 60.605 |
+| Python | 0.610344 | 315.789 |
 
 Summary CSV files are stored in
 [`docs/assets/benchmark_original_summary.csv`](assets/benchmark_original_summary.csv)
