@@ -98,6 +98,7 @@ component.
 --timeout K                    Per-PD-code timeout in seconds; -1 means no timeout.
 --verbose                      Print timestamped progress logs to stderr.
 --show-step-pd                 Print each post-witness PD code to stdout.
+--log-file FILEPATH            Tee stdout and stderr output into a flushed log file.
 --known-crossingless-components N
                                Add N components not representable in PD code.
 --remove-crossings LIST        Report component counts after removing crossings.
@@ -136,6 +137,10 @@ R1/nugatory cleanup for that round. In batch mode the line is prefixed with
 the input label. This diagnostic output uses stdout and is therefore
 intentionally off by default, especially when `--json` output will be parsed
 by another program.
+
+`--log-file FILEPATH` tees everything written to stdout and stderr into the
+given file and flushes that file after each write. The normal terminal output
+is unchanged.
 
 ## Component Accounting
 

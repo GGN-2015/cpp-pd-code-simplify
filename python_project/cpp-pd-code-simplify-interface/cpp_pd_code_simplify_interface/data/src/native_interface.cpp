@@ -4,13 +4,69 @@
 #include <cstring>
 #include <ctime>
 #include <exception>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
+
+class TeeStreamBuffer : public std::streambuf {
+public:
+    TeeStreamBuffer(std::streambuf* primary, std::streambuf* backup, std::mutex& mutex)
+        : primary_(primary), backup_(backup), mutex_(mutex) {}
+
+protected:
+    int overflow(int ch) override {
+        if (ch == traits_type::eof()) {
+            return sync() == 0 ? traits_type::not_eof(ch) : traits_type::eof();
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        const char c = static_cast<char>(ch);
+        const bool ok_primary = primary_->sputc(c) != traits_type::eof();
+        const bool ok_backup = backup_->sputc(c) != traits_type::eof();
+        backup_->pubsync();
+        return ok_primary && ok_backup ? ch : traits_type::eof();
+    }
+
+    std::streamsize xsputn(const char* text, std::streamsize count) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::streamsize primary_count = primary_->sputn(text, count);
+        const std::streamsize backup_count = backup_->sputn(text, count);
+        backup_->pubsync();
+        return primary_count == count && backup_count == count ? count : 0;
+    }
+
+    int sync() override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const int primary_status = primary_->pubsync();
+        const int backup_status = backup_->pubsync();
+        return primary_status == 0 && backup_status == 0 ? 0 : -1;
+    }
+
+private:
+    std::streambuf* primary_;
+    std::streambuf* backup_;
+    std::mutex& mutex_;
+};
+
+class ScopedStreamRedirect {
+public:
+    ScopedStreamRedirect(std::ostream& stream, std::streambuf* replacement)
+        : stream_(stream), original_(stream.rdbuf(replacement)) {}
+
+    ~ScopedStreamRedirect() {
+        stream_.rdbuf(original_);
+    }
+
+private:
+    std::ostream& stream_;
+    std::streambuf* original_;
+};
 
 std::string local_timestamp() {
     const std::time_t now = std::time(nullptr);
@@ -139,10 +195,31 @@ char* pdcode_simplify_run_json(
     int show_step_pd,
     unsigned long long known_crossingless_components,
     const int* removed_crossings,
-    unsigned long long removed_crossing_count) {
+    unsigned long long removed_crossing_count,
+    const char* log_file_path) {
     try {
         if (pd_text == nullptr) {
             return copy_string("{\"error\":\"pd_text must not be null\"}");
+        }
+
+        std::ofstream log_file;
+        std::mutex log_mutex;
+        std::unique_ptr<TeeStreamBuffer> cout_tee;
+        std::unique_ptr<TeeStreamBuffer> cerr_tee;
+        std::unique_ptr<ScopedStreamRedirect> cout_redirect;
+        std::unique_ptr<ScopedStreamRedirect> cerr_redirect;
+        if (log_file_path != nullptr && log_file_path[0] != '\0') {
+            log_file.open(log_file_path, std::ios::out | std::ios::app | std::ios::binary);
+            if (!log_file) {
+                return copy_string(
+                    std::string("{\"error\":\"could not open log file: ")
+                    + json_escape(log_file_path)
+                    + "\"}");
+            }
+            cout_tee.reset(new TeeStreamBuffer(std::cout.rdbuf(), log_file.rdbuf(), log_mutex));
+            cerr_tee.reset(new TeeStreamBuffer(std::cerr.rdbuf(), log_file.rdbuf(), log_mutex));
+            cout_redirect.reset(new ScopedStreamRedirect(std::cout, cout_tee.get()));
+            cerr_redirect.reset(new ScopedStreamRedirect(std::cerr, cerr_tee.get()));
         }
 
         const std::string text(pd_text);

@@ -132,6 +132,38 @@ def run_cpp(executable: Path, pd_code: str) -> dict:
     return payload
 
 
+def test_log_file(executable: Path) -> None:
+    log_path = ROOT / ".cache" / "cpp-cli-log-file-test.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        [
+            str(executable),
+            "--pd-code",
+            "PD[X[1,5,2,4],X[2,5,3,6],X[6,3,1,4]]",
+            "--max-thread",
+            "1",
+            "--verbose",
+            "--show-step-pd",
+            "--log-file",
+            str(log_path),
+        ],
+        cwd=str(ROOT),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"C++ log-file smoke failed:\n{proc.stdout}\n{proc.stderr}")
+    log_text = log_path.read_text(encoding="utf-8")
+    if "step_pd_code[1]: PD[X[1,2,2,1]]" not in log_text:
+        raise AssertionError("C++ log file should contain stdout step output")
+    if "final_pd_code: PD[]" not in log_text:
+        raise AssertionError("C++ log file should contain stdout final output")
+    if "[pdcode-simplify " not in log_text:
+        raise AssertionError("C++ log file should contain stderr verbose output")
+
+
 def main() -> int:
     pd_code_to_diagram = import_pd_code_to_diagram()
     executable = find_executable()
@@ -149,6 +181,7 @@ def main() -> int:
                 f"round trip: {format_pd_code(round_tripped)}"
             )
 
+    test_log_file(executable)
     print(f"C++ output diagram sanity tests passed ({len(CASES)} cases)")
     return 0
 

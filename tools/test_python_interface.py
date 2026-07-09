@@ -165,6 +165,8 @@ def main() -> int:
     assert "Traceback" not in missing_file_proc.stdout + missing_file_proc.stderr
     assert "error" in json.loads(missing_file_proc.stdout)
 
+    log_file = ROOT / ".cache" / "python-interface-log-file-test.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
         [
             sys.executable,
@@ -174,7 +176,10 @@ def main() -> int:
             SAME_FACE_GREEN_UNKNOT,
             "--max-thread",
             "1",
+            "--verbose",
             "--show-step-pd",
+            "--log-file",
+            str(log_file),
         ],
         cwd=str(ROOT),
         text=True,
@@ -186,6 +191,10 @@ def main() -> int:
     assert proc.returncode == 0, proc.stderr
     assert "step_pd_code[1]: PD[X[1,2,2,1]]" in proc.stdout
     assert '"final_pd_code": "PD[]"' in proc.stdout
+    log_text = log_file.read_text(encoding="utf-8")
+    assert "step_pd_code[1]: PD[X[1,2,2,1]]" in log_text
+    assert '"final_pd_code": "PD[]"' in log_text
+    assert "[pdcode-simplify " in log_text
 
     brute = interface.simplify(TREFOIL, ban_heuristic=True, max_thread=1)
     brute_parallel = interface.simplify(TREFOIL, ban_heuristic=True, max_thread=4)

@@ -56,7 +56,9 @@ and sets `timed_out` to `True`. Verbose log lines use local wall-clock time in
 `YYYY-MM-DD HH:MM:SS` format. When `max_thread=-1` reaches a brute-force search
 phase, verbose logs also include `actual_threads`, the worker count selected by
 the C++ backend for that phase. The backend call runs in a helper process, so
-`Ctrl+C` can terminate active C++ work and its worker threads cleanly.
+`Ctrl+C` can terminate active C++ work and its worker threads cleanly. Use
+`log_file=PATH`, or CLI flag `--log-file PATH`, to tee stdout and stderr into a
+flushed backup log file.
 Use `show_step_pd=True`, or CLI flag `--show-step-pd`, to print
 `step_pd_code[ROUND]: PD[...]` to stdout after each mid-simplification witness
 is applied and canonicalized, before that round's automatic R1/nugatory

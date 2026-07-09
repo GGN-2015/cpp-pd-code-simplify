@@ -16,7 +16,9 @@ import os
 import re
 import sys
 import time
+import threading
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +32,69 @@ HEURISTIC_MIN_STATE_BUDGET = 128
 HEURISTIC_MAX_STATE_BUDGET = 4096
 HEURISTIC_MIN_PATH_BUDGET = 24
 HEURISTIC_MAX_PATH_BUDGET = 384
+
+
+class TeeTextIO:
+    def __init__(self, primary: Any, log_file: Path, lock: threading.RLock):
+        self._primary = primary
+        self._log_file = log_file
+        self._lock = lock
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            written = self._primary.write(text)
+            self._primary.flush()
+            with self._log_file.open("a", encoding="utf-8") as backup:
+                backup.write(text)
+                backup.flush()
+        return written
+
+    def flush(self) -> None:
+        with self._lock:
+            self._primary.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._primary, name)
+
+
+@contextmanager
+def tee_standard_streams(log_file: Optional[str]):
+    if not log_file:
+        yield
+        return
+    lock = threading.RLock()
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    log_path = Path(log_file)
+    log_path.write_text("", encoding="utf-8")
+    sys.stdout = TeeTextIO(original_stdout, log_path, lock)  # type: ignore[assignment]
+    sys.stderr = TeeTextIO(original_stderr, log_path, lock)  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+
+
+def log_file_arg(argv: Sequence[str]) -> Optional[str]:
+    log_file: Optional[str] = None
+    index = 0
+    while index < len(argv):
+        if argv[index] == "--log-file":
+            if index + 1 >= len(argv):
+                raise ValueError("--log-file requires a file path")
+            log_file = argv[index + 1]
+            index += 2
+        elif argv[index].startswith("--log-file="):
+            log_file = argv[index].split("=", 1)[1]
+            if not log_file:
+                raise ValueError("--log-file requires a file path")
+            index += 1
+        else:
+            index += 1
+    return log_file
 
 
 def local_timestamp() -> str:
@@ -2444,6 +2509,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="with --max-paths -1, enumerate all green paths instead of heuristic sampling")
     parser.add_argument("--verbose", action="store_true", help="print progress logs to stderr")
     parser.add_argument(
+        "--log-file",
+        help="tee stdout and stderr output into this flushed log file",
+    )
+    parser.add_argument(
         "--show-step-pd",
         action="store_true",
         help="print the PD code after each witness application",
@@ -2512,6 +2581,17 @@ def parse_removed_crossings(text: Optional[str]) -> Optional[List[int]]:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        selected_log_file = log_file_arg(raw_argv)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    with tee_standard_streams(selected_log_file):
+        return main_impl(raw_argv)
+
+
+def main_impl(argv: Sequence[str]) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     if args.reduction_round < -1:

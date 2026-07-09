@@ -49,6 +49,8 @@ Use `--show-step-pd` to print `step_pd_code[ROUND]: PD[...]` to stdout after
 each mid-simplification witness is applied and canonicalized, before that
 round's automatic R1/nugatory cleanup. This diagnostic output is disabled by
 default because it can be large and shares stdout with JSON/text results.
+Use `--log-file FILEPATH` to tee stdout and stderr into a flushed backup log
+file while keeping the normal terminal output unchanged.
 
 Report crossingless components after removing all trefoil crossings:
 

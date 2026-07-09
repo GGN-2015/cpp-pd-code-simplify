@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 from importlib import resources
 from typing import Any, Optional, Sequence, Union
 
@@ -28,6 +29,69 @@ PdManyInput = Union[str, Sequence[PdInput]]
 
 class PdCodeSimplifyInterfaceError(RuntimeError):
     """Raised when the C++ dynamic library cannot be built or called."""
+
+
+class TeeTextIO:
+    def __init__(self, primary: Any, log_file: pathlib.Path, lock: threading.RLock):
+        self._primary = primary
+        self._log_file = log_file
+        self._lock = lock
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            written = self._primary.write(text)
+            self._primary.flush()
+            with self._log_file.open("a", encoding="utf-8") as backup:
+                backup.write(text)
+                backup.flush()
+        return written
+
+    def flush(self) -> None:
+        with self._lock:
+            self._primary.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._primary, name)
+
+
+@contextlib.contextmanager
+def _tee_standard_streams(log_file: Optional[Union[str, os.PathLike[str]]]):
+    if log_file is None:
+        yield
+        return
+    lock = threading.RLock()
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    log_path = pathlib.Path(log_file)
+    log_path.write_text("", encoding="utf-8")
+    sys.stdout = TeeTextIO(original_stdout, log_path, lock)  # type: ignore[assignment]
+    sys.stderr = TeeTextIO(original_stderr, log_path, lock)  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+
+
+def _log_file_arg(argv: Sequence[str]) -> Optional[str]:
+    log_file: Optional[str] = None
+    index = 0
+    while index < len(argv):
+        if argv[index] == "--log-file":
+            if index + 1 >= len(argv):
+                raise ValueError("--log-file requires a file path")
+            log_file = argv[index + 1]
+            index += 2
+        elif argv[index].startswith("--log-file="):
+            log_file = argv[index].split("=", 1)[1]
+            if not log_file:
+                raise ValueError("--log-file requires a file path")
+            index += 1
+        else:
+            index += 1
+    return log_file
 
 
 def _format_pd(crossings: Sequence[Sequence[int]]) -> str:
@@ -771,6 +835,7 @@ def _load_library() -> ctypes.CDLL:
         ctypes.c_ulonglong,
         ctypes.POINTER(ctypes.c_int),
         ctypes.c_ulonglong,
+        ctypes.c_char_p,
     ]
     library.pdcode_simplify_run_json.restype = ctypes.c_void_p
     library.pdcode_simplify_free_string.argtypes = [ctypes.c_void_p]
@@ -792,6 +857,7 @@ def _run_one_direct(
     show_step_pd: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
+    log_file: Optional[Union[str, os.PathLike[str]]] = None,
 ) -> dict[str, Any]:
     if reduction_round < -1:
         raise ValueError("reduction_round must be -1 or a non-negative integer")
@@ -804,6 +870,7 @@ def _run_one_direct(
     removed_array = None
     if removed_count:
         removed_array = (ctypes.c_int * removed_count)(*(int(value) for value in remove_crossings or []))
+    encoded_log_file = None if log_file is None else os.fsencode(log_file)
 
     pointer = library.pdcode_simplify_run_json(
         pd_text.encode("utf-8"),
@@ -817,6 +884,7 @@ def _run_one_direct(
         int(known_crossingless_components),
         removed_array,
         int(removed_count),
+        encoded_log_file,
     )
     if not pointer:
         raise PdCodeSimplifyInterfaceError("C++ interface returned a null JSON pointer")
@@ -857,6 +925,7 @@ def _run_one(
     show_step_pd: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
+    log_file: Optional[Union[str, os.PathLike[str]]] = None,
 ) -> dict[str, Any]:
     if reduction_round < -1:
         raise ValueError("reduction_round must be -1 or a non-negative integer")
@@ -877,6 +946,8 @@ def _run_one(
         "known_crossingless_components": int(known_crossingless_components),
         "remove_crossings": [int(value) for value in remove_crossings or []],
     }
+    if log_file is not None:
+        request["log_file"] = str(log_file)
     protocol_output_path: Optional[pathlib.Path] = None
     if show_step_pd:
         fd, protocol_name = tempfile.mkstemp(
@@ -953,21 +1024,25 @@ def simplify(
     show_step_pd: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
+    log_file: Optional[Union[str, os.PathLike[str]]] = None,
+    _tee_parent: bool = True,
 ) -> dict[str, Any]:
     """Run the C++ simplifier for one PD code and return its JSON result."""
 
-    return _run_one(
-        normalize_pd_code(pd_code),
-        max_paths=max_paths,
-        ban_heuristic=ban_heuristic,
-        reduction_round=reduction_round,
-        max_thread=max_thread,
-        timeout=timeout,
-        verbose=verbose,
-        show_step_pd=show_step_pd,
-        known_crossingless_components=known_crossingless_components,
-        remove_crossings=remove_crossings,
-    )
+    with _tee_standard_streams(log_file if _tee_parent else None):
+        return _run_one(
+            normalize_pd_code(pd_code),
+            max_paths=max_paths,
+            ban_heuristic=ban_heuristic,
+            reduction_round=reduction_round,
+            max_thread=max_thread,
+            timeout=timeout,
+            verbose=verbose,
+            show_step_pd=show_step_pd,
+            known_crossingless_components=known_crossingless_components,
+            remove_crossings=remove_crossings,
+            log_file=log_file,
+        )
 
 
 def simplify_many(
@@ -982,27 +1057,42 @@ def simplify_many(
     show_step_pd: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
+    log_file: Optional[Union[str, os.PathLike[str]]] = None,
+    _tee_parent: bool = True,
 ) -> list[dict[str, Any]]:
     """Run the C++ simplifier for one or more PD codes and return JSON results."""
 
-    return [
-        _run_one(
-            pd_text,
-            max_paths=max_paths,
-            ban_heuristic=ban_heuristic,
-            reduction_round=reduction_round,
-            max_thread=max_thread,
-            timeout=timeout,
-            verbose=verbose,
-            show_step_pd=show_step_pd,
-            known_crossingless_components=known_crossingless_components,
-            remove_crossings=remove_crossings,
-        )
-        for pd_text in normalize_pd_codes(pd_codes)
-    ]
+    with _tee_standard_streams(log_file if _tee_parent else None):
+        return [
+            _run_one(
+                pd_text,
+                max_paths=max_paths,
+                ban_heuristic=ban_heuristic,
+                reduction_round=reduction_round,
+                max_thread=max_thread,
+                timeout=timeout,
+                verbose=verbose,
+                show_step_pd=show_step_pd,
+                known_crossingless_components=known_crossingless_components,
+                remove_crossings=remove_crossings,
+                log_file=log_file,
+            )
+            for pd_text in normalize_pd_codes(pd_codes)
+        ]
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        selected_log_file = _log_file_arg(raw_argv)
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2))
+        return 2
+    with _tee_standard_streams(selected_log_file):
+        return _main_impl(raw_argv)
+
+
+def _main_impl(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description="Run cpp-pd-code-simplify through the Python interface.")
     parser.add_argument("pd_code", nargs="?", help="PD code as PD[...] text or a Python-style list of crossings.")
     parser.add_argument("--pd-code", "-c", dest="pd_code_option", help="literal PD[...] string")
@@ -1014,6 +1104,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--timeout", type=int, default=-1)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--show-step-pd", action="store_true")
+    parser.add_argument("--log-file", help="tee stdout and stderr output into this flushed log file")
     parser.add_argument("--known-crossingless-components", type=int, default=0)
     parser.add_argument("--remove-crossings", help="comma-separated zero-based crossing indices")
     args = parser.parse_args(argv)
@@ -1059,6 +1150,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     show_step_pd=args.show_step_pd,
                     known_crossingless_components=args.known_crossingless_components,
                     remove_crossings=remove_crossings,
+                    log_file=args.log_file,
+                    _tee_parent=False,
                 )
                 if show_labels:
                     item = {"label": label, **item}
@@ -1092,6 +1185,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 show_step_pd=args.show_step_pd,
                 known_crossingless_components=args.known_crossingless_components,
                 remove_crossings=remove_crossings,
+                log_file=args.log_file,
+                _tee_parent=False,
             )
             if isinstance(payload, dict) and payload.get("timed_out"):
                 exit_code = 2

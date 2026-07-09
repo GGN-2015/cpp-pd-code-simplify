@@ -84,7 +84,9 @@ wall-clock time in `YYYY-MM-DD HH:MM:SS` format. When `max_thread=-1` reaches a
 brute-force search phase, verbose logs also include `actual_threads`, the
 worker count selected by the C++ backend for that phase. Calls run the C++
 backend in a helper process, so `Ctrl+C` can terminate active C++ work and its
-worker threads cleanly before the Python process exits.
+worker threads cleanly before the Python process exits. Pass `log_file=PATH`,
+or use CLI flag `--log-file PATH`, to tee stdout and stderr output into a
+flushed backup log file.
 
 Pass `show_step_pd=True`, or use CLI flag `--show-step-pd`, to print
 `step_pd_code[ROUND]: PD[...]` to stdout after each mid-simplification witness

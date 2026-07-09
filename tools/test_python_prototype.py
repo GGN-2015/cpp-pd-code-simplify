@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import subprocess
 import sys
 from pathlib import Path
 
@@ -212,6 +213,33 @@ def main() -> int:
     good_result, good_components, _ = simplify.run_job(batch[1])
     require(good_result.code == [], "valid batch job should still produce final PD code")
     require(good_components.crossingless_components == 1, "valid job after an invalid one should still run")
+
+    log_path = ROOT / ".cache" / "python-prototype-log-file-test.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "mid_simplify_v5.py"),
+            "--pd-code",
+            "PD[X[1,5,2,4],X[2,5,3,6],X[6,3,1,4]]",
+            "--max-thread",
+            "1",
+            "--verbose",
+            "--show-step-pd",
+            "--log-file",
+            str(log_path),
+        ],
+        cwd=str(ROOT),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    require(proc.returncode == 0, f"Python CLI log-file smoke failed: {proc.stderr}")
+    log_text = log_path.read_text(encoding="utf-8")
+    require("step_pd_code[1]: PD[X[1,2,2,1]]" in log_text, "Python log file should contain stdout step output")
+    require("final_pd_code: PD[]" in log_text, "Python log file should contain stdout final output")
+    require("[pdcode-simplify " in log_text, "Python log file should contain stderr verbose output")
 
     print("Python prototype tests passed")
     return 0

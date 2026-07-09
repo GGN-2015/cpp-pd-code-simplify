@@ -24,6 +24,7 @@ def main() -> int:
                 request.get("known_crossingless_components", 0)
             ),
             remove_crossings=request.get("remove_crossings") or [],
+            log_file=request.get("log_file"),
         )
         output = json.dumps({"ok": True, "result": result}, separators=(",", ":"))
         protocol_output_path = request.get("protocol_output_path")

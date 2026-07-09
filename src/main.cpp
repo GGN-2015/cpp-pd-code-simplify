@@ -7,6 +7,8 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -33,6 +35,78 @@ void handle_interrupt(int) {
 
 bool interrupted() {
     return g_interrupted != 0;
+}
+
+class TeeStreamBuffer : public std::streambuf {
+public:
+    TeeStreamBuffer(std::streambuf* primary, std::streambuf* backup, std::mutex& mutex)
+        : primary_(primary), backup_(backup), mutex_(mutex) {}
+
+protected:
+    int overflow(int ch) override {
+        if (ch == traits_type::eof()) {
+            return sync() == 0 ? traits_type::not_eof(ch) : traits_type::eof();
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        const char c = static_cast<char>(ch);
+        const bool ok_primary = primary_->sputc(c) != traits_type::eof();
+        const bool ok_backup = backup_->sputc(c) != traits_type::eof();
+        backup_->pubsync();
+        return ok_primary && ok_backup ? ch : traits_type::eof();
+    }
+
+    std::streamsize xsputn(const char* text, std::streamsize count) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::streamsize primary_count = primary_->sputn(text, count);
+        const std::streamsize backup_count = backup_->sputn(text, count);
+        backup_->pubsync();
+        return primary_count == count && backup_count == count ? count : 0;
+    }
+
+    int sync() override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const int primary_status = primary_->pubsync();
+        const int backup_status = backup_->pubsync();
+        return primary_status == 0 && backup_status == 0 ? 0 : -1;
+    }
+
+private:
+    std::streambuf* primary_;
+    std::streambuf* backup_;
+    std::mutex& mutex_;
+};
+
+class ScopedStreamRedirect {
+public:
+    ScopedStreamRedirect(std::ostream& stream, std::streambuf* replacement)
+        : stream_(stream), original_(stream.rdbuf(replacement)) {}
+
+    ~ScopedStreamRedirect() {
+        stream_.rdbuf(original_);
+    }
+
+private:
+    std::ostream& stream_;
+    std::streambuf* original_;
+};
+
+std::string log_file_arg(int argc, char** argv) {
+    std::string result;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--log-file") {
+            if (i + 1 >= argc) {
+                throw std::invalid_argument("--log-file requires a file path");
+            }
+            result = argv[++i];
+        } else if (arg.compare(0, 11, "--log-file=") == 0) {
+            result = arg.substr(11);
+            if (result.empty()) {
+                throw std::invalid_argument("--log-file requires a file path");
+            }
+        }
+    }
+    return result;
 }
 
 std::string local_timestamp() {
@@ -82,6 +156,7 @@ void print_help(const char* program) {
         << "Use --timeout K to cap each PD-code job in seconds; -1 means no timeout.\n"
         << "Use --verbose to print progress logs to stderr.\n"
         << "Use --show-step-pd to print the canonical PD code after each witness application.\n"
+        << "Use --log-file FILEPATH to tee stdout and stderr output into a flushed log file.\n"
         << "If no input is given, the CLI tries to read PD.txt from the current directory.\n";
 }
 
@@ -459,8 +534,27 @@ void print_json_error(const std::string& error, const std::string* label = nullp
 }  // namespace
 
 int main(int argc, char** argv) {
+    std::ofstream log_file;
+    std::mutex log_mutex;
+    std::unique_ptr<TeeStreamBuffer> cout_tee;
+    std::unique_ptr<TeeStreamBuffer> cerr_tee;
+    std::unique_ptr<ScopedStreamRedirect> cout_redirect;
+    std::unique_ptr<ScopedStreamRedirect> cerr_redirect;
+
     try {
         std::signal(SIGINT, handle_interrupt);
+        const std::string log_path = log_file_arg(argc, argv);
+        if (!log_path.empty()) {
+            log_file.open(log_path.c_str(), std::ios::out | std::ios::binary);
+            if (!log_file) {
+                throw std::runtime_error("Could not open log file: " + log_path);
+            }
+            cout_tee.reset(new TeeStreamBuffer(std::cout.rdbuf(), log_file.rdbuf(), log_mutex));
+            cerr_tee.reset(new TeeStreamBuffer(std::cerr.rdbuf(), log_file.rdbuf(), log_mutex));
+            cout_redirect.reset(new ScopedStreamRedirect(std::cout, cout_tee.get()));
+            cerr_redirect.reset(new ScopedStreamRedirect(std::cerr, cerr_tee.get()));
+        }
+
         pdcode_simplify::SimplifierOptions options;
         options.progress = [](const std::string& message) {
             print_progress_log(message);
@@ -492,6 +586,15 @@ int main(int argc, char** argv) {
                 options.ban_heuristic = true;
             } else if (arg == "--verbose") {
                 options.verbose = true;
+            } else if (arg == "--log-file") {
+                if (i + 1 >= argc) {
+                    throw std::invalid_argument("--log-file requires a file path");
+                }
+                ++i;
+            } else if (arg.compare(0, 11, "--log-file=") == 0) {
+                if (arg.size() == 11) {
+                    throw std::invalid_argument("--log-file requires a file path");
+                }
             } else if (arg == "--max-paths") {
                 if (i + 1 >= argc) {
                     throw std::invalid_argument("--max-paths requires a value");
