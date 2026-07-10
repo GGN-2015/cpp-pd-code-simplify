@@ -47,7 +47,10 @@ applied only at the final JSON boundary; the C++ backend keeps its internal
 numbering unchanged while simplifying.
 
 The default `max_paths=-1` uses deterministic heuristic green-path sampling in
-the C++ backend. Use `ban_heuristic=True` to request exhaustive green-path
+the C++ backend. Heuristic mode tries longer red arcs first, scores validated
+witnesses by the actual crossing reduction obtained after temporary
+application, and uses a fixed bounded lookahead before applying the best
+candidate. Use `ban_heuristic=True` to request exhaustive green-path
 enumeration for a manageable input. Use `reduction_round=K` to cap applied
 mid-simplification rounds; the default `-1` runs until stable. In default
 heuristic mode, a miss is followed by the native deterministic non-monotone
@@ -56,7 +59,10 @@ diagram is treated as stable. Use
 `timeout=K` to cap a call at `K` seconds; the default `-1` has no timeout. Use
 `verbose=True` to forward timestamped C++ progress logs to stderr. If a call
 times out, the returned dictionary still contains the best PD code found so far
-and sets `timed_out` to `True`. Brute-force green-path enumeration is streamed
+and sets `timed_out` to `True`. Use `quit_at_crossing=N`, or CLI flag
+`--quit-at-crossing N`, to stop once the current PD code has at most `N`
+crossings; the returned dictionary sets `stopped_by_crossing_limit` when the
+threshold is reached. Brute-force green-path enumeration is streamed
 by the C++ backend; pass `bruteforce_budget=N` to cap brute-force green-path
 checks per PD code. The default is `200000`, and `-1` disables that cap. If the
 budget is exhausted, the returned dictionary still contains the current best PD

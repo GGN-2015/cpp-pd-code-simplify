@@ -80,6 +80,7 @@ options.max_paths = -1;          // heuristic path sampling by default
 options.ban_heuristic = false;   // true forces brute-force enumeration
 options.max_threads = -1;        // auto-select worker threads
 options.timeout_seconds = -1;    // no timeout
+options.quit_at_crossing = -1;   // stop at N crossings, or -1 to disable
 options.bruteforce_budget = 200000;
 options.verbose = true;
 options.progress = [](const std::string& message) {

@@ -44,6 +44,11 @@ brute-force proof pass if the failover does not lower the crossing count.
 
 ## Scoring
 
+Before green paths are sampled, heuristic mode orders red paths by decreasing
+length, then by endpoint indices. This keeps the search deterministic while
+trying high-potential red arcs before short arcs that can only remove a small
+number of crossings.
+
 For each source-target face pair, the heuristic first computes a reverse
 breadth-first distance from every face to the target. This distance ignores
 high-weight red-interior barriers, so it is only a reachability and length
@@ -80,6 +85,20 @@ The first two keys prefer short and low-weight paths. The branch penalty keeps
 the search from spending all budget inside a single locally dense area. The
 serial number makes the result reproducible across platforms.
 
+The sampler does not apply the first valid witness immediately. For each red
+path, every sampled green path that passes validation is applied to a temporary
+PD code, and the candidate is scored by the actual crossing reduction
+`old_crossings - temporary_crossings`. The best candidate wins; ties are broken
+by smaller output crossing count, longer red path, shorter green path, and then
+the deterministic generation order.
+
+In multi-threaded heuristic mode, red paths are processed in fixed batches of
+at most the selected worker count. Once a batch finds a valid witness, the
+search continues for a bounded lookahead window and still applies the best
+actual crossing reduction seen in that window. This recovers large-step
+simplifications that are easy to miss with "first witness wins" behavior while
+keeping the search finite.
+
 ## Fixed Budgets
 
 The heuristic uses fixed constants shared by C++ and Python:
@@ -88,6 +107,7 @@ The heuristic uses fixed constants shared by C++ and Python:
 beam width per (depth, face): 8
 state budget: min 128, max 4096
 path budget: min 24, max 384
+best-witness lookahead after a hit: 8 batches
 ```
 
 For each red path, the concrete state budget is derived from the face count and

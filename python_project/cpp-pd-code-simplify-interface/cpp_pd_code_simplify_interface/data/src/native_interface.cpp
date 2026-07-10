@@ -186,6 +186,8 @@ std::string result_to_json(
         << json_escape(result.reapr_invariants_after) << "\",";
     out << "\"stopped_by_round_limit\":"
         << (result.stopped_by_round_limit ? "true" : "false") << ",";
+    out << "\"stopped_by_crossing_limit\":"
+        << (result.stopped_by_crossing_limit ? "true" : "false") << ",";
     out << "\"timed_out\":" << (result.timed_out ? "true" : "false") << ",";
     out << "\"resource_limited\":" << (result.resource_limited ? "true" : "false");
     out << "}";
@@ -216,6 +218,7 @@ char* pdcode_simplify_run_json(
     int max_thread,
     long long bruteforce_budget,
     int timeout_seconds,
+    int quit_at_crossing,
     int verbose,
     int show_step_pd,
     int enable_reapr,
@@ -255,6 +258,7 @@ char* pdcode_simplify_run_json(
         options.max_threads = max_thread;
         options.bruteforce_budget = bruteforce_budget;
         options.timeout_seconds = timeout_seconds;
+        options.quit_at_crossing = quit_at_crossing;
         options.reapr_retry_max = reapr_retry_max;
         options.ban_heuristic = ban_heuristic != 0;
         options.enable_reapr = enable_reapr != 0;

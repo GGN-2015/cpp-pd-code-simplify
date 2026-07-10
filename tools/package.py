@@ -221,7 +221,7 @@ def run_tests(args: argparse.Namespace) -> None:
     run(
         [
             sys.executable,
-            "tools/test_random_khovanov_invariance.py",
+            "tools/test_random_invariant_profile.py",
             "--cpp-exe",
             str(executable),
             "--sample-count",
@@ -231,7 +231,7 @@ def run_tests(args: argparse.Namespace) -> None:
             "--max-thread",
             "4",
             "--timeout",
-            "60",
+            "30",
             "--cxx",
             args.cxx,
         ],

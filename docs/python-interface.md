@@ -75,16 +75,23 @@ normalization is applied at the final JSON boundary; the C++ backend keeps its
 internal numbering unchanged while simplifying.
 
 `max_paths=-1` is the default and enables deterministic heuristic green-path
-sampling in the C++ backend. Pass `ban_heuristic=True` to request exhaustive
-green-path enumeration for the same input. `reduction_round=-1` is the
-default and applies mid-simplification witnesses until stable. In the default
-heuristic mode, a heuristic miss is followed by the native deterministic
-non-monotone failover, then by a brute-force proof pass, and finally by the
-RIII failover before a diagram is treated as stable. Pass
+sampling in the C++ backend. Heuristic mode tries longer red arcs first, scores
+validated witnesses by the actual crossing reduction obtained after temporary
+application, and uses a fixed bounded lookahead before applying the best
+candidate. Pass `ban_heuristic=True` to request exhaustive green-path
+enumeration for the same input. `reduction_round=-1` is the default and applies
+mid-simplification witnesses until stable. In the default heuristic mode, a
+heuristic miss is followed by the native deterministic non-monotone failover,
+then by a brute-force proof pass, and finally by the RIII failover before a
+diagram is treated as stable. Pass
 `timeout=K` to cap a call at `K` seconds; the default `-1` has no timeout. Pass
 `verbose=True` to forward timestamped C++ progress logs to stderr. If a call
 exceeds its timeout, the returned dictionary still contains the best PD code
-found so far and sets `timed_out` to `True`. Brute-force green-path
+found so far and sets `timed_out` to `True`.
+Pass `quit_at_crossing=N`, or CLI flag `--quit-at-crossing N`, to stop once
+the current PD code has at most `N` crossings. The default `-1` disables this;
+the returned dictionary sets `stopped_by_crossing_limit` when the threshold is
+reached. Brute-force green-path
 enumeration is streamed by the C++ backend; pass `bruteforce_budget=N` to cap
 brute-force green-path checks per PD code. The default is `200000`, and `-1`
 disables that cap. If the budget is exhausted, the returned dictionary still

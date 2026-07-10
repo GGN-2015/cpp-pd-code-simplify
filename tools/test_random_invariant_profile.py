@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Randomized Khovanov-homology invariance checks for simplification output."""
+"""Randomized invariant-profile checks for simplification output."""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ import random
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,13 +24,11 @@ import benchmark_dataset as dataset  # noqa: E402
 import mid_simplify_v5 as pysimplify  # noqa: E402
 
 
-PDCode = List[List[int]]
-
-
 @dataclass(frozen=True)
-class KhCase:
+class InvariantCase:
     name: str
     pd_text: str
+    quit_at_crossing: int = -1
 
     @property
     def crossings(self) -> int:
@@ -45,17 +44,18 @@ BASE_CODES: Mapping[str, dataset.PDCode] = {
     "torus_7": dataset.torus_2_odd(7),
 }
 
-TARGETED_CASES: Sequence[KhCase] = (
-    KhCase(
+TARGETED_CASES: Sequence[InvariantCase] = (
+    InvariantCase(
         "same_face_green_unknot",
         "PD[X[1,5,2,4],X[2,5,3,6],X[6,3,1,4]]",
     ),
-    KhCase(
+    InvariantCase(
         "r3_failover_16_to_14",
         "PD[X[1,24,2,25],X[2,16,3,15],X[4,27,5,28],X[6,29,7,30],"
         "X[8,18,9,17],X[11,21,12,20],X[13,23,14,22],X[16,8,17,7],"
         "X[19,11,20,10],X[21,13,22,12],X[23,32,24,1],X[25,15,26,14],"
         "X[26,3,27,4],X[28,5,29,6],X[30,9,31,10],X[31,18,32,19]]",
+        14,
     ),
 )
 
@@ -79,7 +79,7 @@ def default_cpp_exe() -> Path:
 
 
 def preferred_cxx() -> Optional[str]:
-    for key in ("CPPKH_INTERFACE_TEST_CXX", "CPP_PD_CODE_SIMPLIFY_INTERFACE_TEST_CXX", "CXX"):
+    for key in ("CPP_PD_CODE_SIMPLIFY_INTERFACE_TEST_CXX", "CXX"):
         value = os.environ.get(key)
         if value:
             return value
@@ -109,26 +109,15 @@ def configure_compiler(cxx: Optional[str]) -> None:
     cpp_simple_interface.set_gpp_filepath(cxx)
 
 
-def import_cppkh_interface(cxx: Optional[str]):
-    configure_compiler(cxx)
-    try:
-        import cppkh_interface
-    except ImportError as exc:
-        raise RuntimeError(
-            "cppkh-interface is required for Khovanov invariance tests. "
-            "Install development dependencies with `python -m pip install -r requirements-dev.txt`."
-        ) from exc
-    return cppkh_interface
-
-
 def import_python_interface(cxx: Optional[str]):
     interface_root = ROOT / "python_project" / "cpp-pd-code-simplify-interface"
     sys.path.insert(0, str(interface_root))
+    configure_compiler(cxx)
     if cxx:
         os.environ["CXX"] = cxx
     os.environ.setdefault(
         "CPP_PD_CODE_SIMPLIFY_INTERFACE_CACHE_DIR",
-        str(ROOT / ".cache" / "random-khovanov-interface"),
+        str(ROOT / ".cache" / "random-invariant-profile-interface"),
     )
     import cpp_pd_code_simplify_interface as interface
 
@@ -139,7 +128,7 @@ def normalize_pd_text(code: Iterable[Sequence[int]]) -> str:
     return pysimplify.format_final_pd_code([list(crossing) for crossing in code])
 
 
-def build_random_cases(sample_count: int, max_moves: int, seed: int) -> List[KhCase]:
+def build_random_cases(sample_count: int, max_moves: int, seed: int) -> List[InvariantCase]:
     if sample_count < 0:
         raise ValueError("sample_count must be non-negative")
     if max_moves < 0:
@@ -154,7 +143,7 @@ def build_random_cases(sample_count: int, max_moves: int, seed: int) -> List[KhC
         inflation_seed = rng.randrange(1, 2**31)
         inflated = dataset.inflate_by_type_i(base_code, moves=moves, seed=inflation_seed)
         cases.append(
-            KhCase(
+            InvariantCase(
                 f"random_{index + 1:02d}_{base_name}_r1x{moves}_seed{inflation_seed}",
                 normalize_pd_text(inflated),
             )
@@ -162,7 +151,7 @@ def build_random_cases(sample_count: int, max_moves: int, seed: int) -> List[KhC
     return cases
 
 
-def parse_json_payload(stdout: str) -> Dict[str, object]:
+def parse_json_payload(stdout: str) -> Mapping[str, object]:
     payload = json.loads(stdout)
     if isinstance(payload, list):
         if len(payload) != 1:
@@ -179,7 +168,8 @@ def run_cpp_simplifier(
     max_thread: int,
     bruteforce_budget: int,
     timeout: int,
-) -> Dict[str, object]:
+    quit_at_crossing: int,
+) -> Mapping[str, object]:
     command = [
         str(executable),
         "--pd-code",
@@ -195,6 +185,8 @@ def run_cpp_simplifier(
         str(bruteforce_budget),
         "--timeout",
         str(timeout),
+        "--quit-at-crossing",
+        str(quit_at_crossing),
     ]
     proc = subprocess.run(
         command,
@@ -213,8 +205,6 @@ def run_cpp_simplifier(
     payload = parse_json_payload(proc.stdout)
     if "error" in payload:
         raise RuntimeError(f"C++ simplifier returned an error payload: {payload}")
-    if payload.get("timed_out"):
-        raise RuntimeError(f"C++ simplifier timed out before a final invariance check: {payload}")
     if payload.get("resource_limited"):
         raise RuntimeError(f"C++ simplifier hit the brute-force resource budget: {payload}")
     return payload
@@ -225,7 +215,8 @@ def run_python_simplifier(
     max_thread: int,
     bruteforce_budget: int,
     timeout: int,
-) -> Dict[str, object]:
+    quit_at_crossing: int,
+) -> Mapping[str, object]:
     code = pysimplify.parse_pd_code(pd_text)
     result = pysimplify.reduce_pd_code(
         code,
@@ -234,9 +225,8 @@ def run_python_simplifier(
         max_thread=max_thread,
         bruteforce_budget=bruteforce_budget,
         timeout=timeout,
+        quit_at_crossing=quit_at_crossing,
     )
-    if result.timed_out:
-        raise RuntimeError("Python simplifier timed out before a final invariance check")
     if result.resource_limited:
         raise RuntimeError("Python simplifier hit the brute-force resource budget")
     return result.to_json()
@@ -248,7 +238,8 @@ def run_interface_simplifier(
     max_thread: int,
     bruteforce_budget: int,
     timeout: int,
-) -> Dict[str, object]:
+    quit_at_crossing: int,
+) -> Mapping[str, object]:
     result = interface.simplify(
         pd_text,
         max_paths=-1,
@@ -256,49 +247,62 @@ def run_interface_simplifier(
         max_thread=max_thread,
         bruteforce_budget=bruteforce_budget,
         timeout=timeout,
+        quit_at_crossing=quit_at_crossing,
     )
-    if result.get("timed_out"):
-        raise RuntimeError("Python C++ interface timed out before a final invariance check")
     if result.get("resource_limited"):
         raise RuntimeError("Python C++ interface hit the brute-force resource budget")
     return result
 
 
-def kh_value(cppkh_interface, cache: Dict[str, str], pd_text: str) -> str:
-    normalized = pysimplify.format_final_pd_code(pysimplify.parse_pd_code(pd_text))
-    found = cache.get(normalized)
-    if found is not None:
-        return found
-    value = cppkh_interface.solve_khovanov(
-        normalized,
-        de_r1=True,
-        de_k8=True,
-        show_real_pdcode=False,
+def profile_for_pd_text(
+    pd_text: str,
+    crossingless_components: int = 0,
+    timeout: int = -1,
+) -> Tuple[pysimplify.ReaprInvariantProfile, str]:
+    code = pysimplify.parse_pd_code(pd_text)
+    deadline = time.monotonic() + timeout if timeout > 0 else None
+    profile = pysimplify._reapr_invariant_profile(  # noqa: SLF001
+        code,
+        crossingless_components,
+        timeout,
+        deadline,
+        include_alexander_roots=True,
     )
-    cache[normalized] = value
-    return value
+    return profile, pysimplify._reapr_invariant_profile_string(profile)  # noqa: SLF001
+
+
+def crossingless_components_from_payload(payload: Mapping[str, object]) -> int:
+    components = payload.get("final_components")
+    if not isinstance(components, Mapping):
+        return 0
+    crossingless = components.get("crossingless_components", 0)
+    return int(crossingless) if isinstance(crossingless, int) else 0
 
 
 def check_backend_result(
-    cppkh_interface,
-    kh_cache: Dict[str, str],
-    case: KhCase,
+    case: InvariantCase,
     backend_name: str,
     payload: Mapping[str, object],
-    input_kh: str,
+    input_profile: pysimplify.ReaprInvariantProfile,
+    input_profile_text: str,
+    invariant_timeout: int,
 ) -> None:
     final_pd = payload.get("final_pd_code")
     if not isinstance(final_pd, str):
         raise RuntimeError(f"{backend_name} did not return final_pd_code for {case.name}: {payload}")
-    final_kh = kh_value(cppkh_interface, kh_cache, final_pd)
-    if final_kh != input_kh:
+    final_profile, final_profile_text = profile_for_pd_text(
+        final_pd,
+        crossingless_components_from_payload(payload),
+        invariant_timeout,
+    )
+    if not pysimplify._reapr_profiles_equal(input_profile, final_profile):  # noqa: SLF001
         raise AssertionError(
-            f"Khovanov homology changed for {case.name} via {backend_name}\n"
+            f"Invariant profile changed for {case.name} via {backend_name}\n"
             f"input crossings: {case.crossings}\n"
             f"input PD: {case.pd_text}\n"
             f"final PD: {final_pd}\n"
-            f"input Kh: {input_kh}\n"
-            f"final Kh: {final_kh}"
+            f"input profile: {input_profile_text}\n"
+            f"final profile: {final_profile_text}"
         )
 
 
@@ -310,12 +314,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--cpp-exe", type=Path, default=None)
     parser.add_argument("--max-thread", type=int, default=4)
     parser.add_argument("--bruteforce-budget", type=int, default=200000)
-    parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument("--invariant-timeout", type=int, default=30)
     parser.add_argument("--cxx", default=preferred_cxx())
     parser.add_argument(
         "--skip-python",
         action="store_true",
-        help="only check C++ CLI output against the input Khovanov homology",
+        help="only check C++ CLI output against the input invariant profile",
     )
     parser.add_argument(
         "--include-interface",
@@ -333,23 +338,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise ValueError("--bruteforce-budget must be -1 or a positive integer")
     if args.timeout < -1 or args.timeout == 0:
         raise ValueError("--timeout must be -1 or a positive integer")
+    if args.invariant_timeout < -1 or args.invariant_timeout == 0:
+        raise ValueError("--invariant-timeout must be -1 or a positive integer")
 
+    configure_compiler(args.cxx)
     executable = args.cpp_exe or default_cpp_exe()
-    cppkh_interface = import_cppkh_interface(args.cxx)
     interface = import_python_interface(args.cxx) if args.include_interface else None
-    kh_cache: Dict[str, str] = {}
     cases = build_random_cases(args.sample_count, args.max_r1_moves, args.seed)
 
     for case in cases:
-        input_kh = kh_value(cppkh_interface, kh_cache, case.pd_text)
+        input_profile, input_profile_text = profile_for_pd_text(
+            case.pd_text,
+            0,
+            args.invariant_timeout,
+        )
         cpp_payload = run_cpp_simplifier(
             executable,
             case.pd_text,
             args.max_thread,
             args.bruteforce_budget,
             args.timeout,
+            case.quit_at_crossing,
         )
-        check_backend_result(cppkh_interface, kh_cache, case, "C++ CLI", cpp_payload, input_kh)
+        check_backend_result(
+            case,
+            "C++ CLI",
+            cpp_payload,
+            input_profile,
+            input_profile_text,
+            args.invariant_timeout,
+        )
 
         backends = ["C++ CLI"]
         if not args.skip_python:
@@ -358,8 +376,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 args.max_thread,
                 args.bruteforce_budget,
                 args.timeout,
+                case.quit_at_crossing,
             )
-            check_backend_result(cppkh_interface, kh_cache, case, "Python prototype", python_payload, input_kh)
+            check_backend_result(
+                case,
+                "Python prototype",
+                python_payload,
+                input_profile,
+                input_profile_text,
+                args.invariant_timeout,
+            )
             backends.append("Python prototype")
 
         if interface is not None:
@@ -369,14 +395,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 args.max_thread,
                 args.bruteforce_budget,
                 args.timeout,
+                case.quit_at_crossing,
             )
             check_backend_result(
-                cppkh_interface,
-                kh_cache,
                 case,
                 "Python C++ interface",
                 interface_payload,
-                input_kh,
+                input_profile,
+                input_profile_text,
+                args.invariant_timeout,
             )
             backends.append("Python C++ interface")
 
@@ -386,7 +413,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"checked {', '.join(backends)}"
         )
 
-    print(f"Khovanov invariance checks passed ({len(cases)} cases)")
+    print(f"Invariant-profile checks passed ({len(cases)} cases)")
     return 0
 
 

@@ -33,6 +33,7 @@ HEURISTIC_MIN_STATE_BUDGET = 128
 HEURISTIC_MAX_STATE_BUDGET = 4096
 HEURISTIC_MIN_PATH_BUDGET = 24
 HEURISTIC_MAX_PATH_BUDGET = 384
+HEURISTIC_BEST_LOOKAHEAD_BATCHES = 8
 R3_FAILOVER_MAX_DEPTH = 8
 R3_FAILOVER_MAX_STATES = 4096
 R3_PREPASS_MAX_DEPTH = 4
@@ -132,8 +133,8 @@ class PdCodeSimplifyTimeoutError(RuntimeError):
 DEFAULT_BRUTEFORCE_BUDGET = 200_000
 REAPR_WARNING = (
     "WARNING: --reapr uses a deterministic internal reembedding/projection oracle "
-    "guarded by component count, Alexander determinant, Goeritz signature, and "
-    "finite-field Alexander root checks. The resulting PD code may still represent "
+    "guarded by component count, Alexander determinant, and finite-field "
+    "Alexander root checks. The resulting PD code may still represent "
     "a different knot or link; verify additional invariants independently."
 )
 _ALEXANDER_FINGERPRINT_PRIMES = (1_000_003, 1_000_033, 1_000_037)
@@ -253,6 +254,8 @@ class SimplificationResult:
     tested_red_paths: int = 0
     tested_green_paths: int = 0
     resource_limited: bool = False
+    crossing_reduction: int = 0
+    resulting_crossings: int = sys.maxsize
 
     def to_json(
         self,
@@ -324,6 +327,7 @@ class ReductionResult:
     reapr_invariants_before: str = ""
     reapr_invariants_after: str = ""
     stopped_by_round_limit: bool = False
+    stopped_by_crossing_limit: bool = False
     timed_out: bool = False
     resource_limited: bool = False
 
@@ -377,6 +381,7 @@ class ReductionResult:
             "reapr_invariants_before": self.reapr_invariants_before,
             "reapr_invariants_after": self.reapr_invariants_after,
             "stopped_by_round_limit": self.stopped_by_round_limit,
+            "stopped_by_crossing_limit": self.stopped_by_crossing_limit,
             "timed_out": self.timed_out,
             "resource_limited": self.resource_limited,
         })
@@ -1519,6 +1524,7 @@ _PARALLEL_TIMEOUT_DEADLINE: Optional[float] = None
 _PARALLEL_MAX_PATHS = -1
 _PARALLEL_BAN_HEURISTIC = True
 _PARALLEL_PATH_SEARCH_MODE = "bruteforce"
+_PARALLEL_COLLECT_BEST = False
 
 
 def _parallel_bruteforce_initializer(
@@ -1535,6 +1541,7 @@ def _parallel_bruteforce_initializer(
     max_paths: int,
     ban_heuristic: bool,
     path_search_mode: str,
+    collect_best: bool = False,
 ) -> None:
     global _PARALLEL_CODE
     global _PARALLEL_DIAGRAM
@@ -1551,6 +1558,7 @@ def _parallel_bruteforce_initializer(
     global _PARALLEL_MAX_PATHS
     global _PARALLEL_BAN_HEURISTIC
     global _PARALLEL_PATH_SEARCH_MODE
+    global _PARALLEL_COLLECT_BEST
 
     _PARALLEL_CODE = code
     check_timeout(timeout, deadline)
@@ -1569,6 +1577,7 @@ def _parallel_bruteforce_initializer(
     _PARALLEL_MAX_PATHS = max_paths
     _PARALLEL_BAN_HEURISTIC = ban_heuristic
     _PARALLEL_PATH_SEARCH_MODE = path_search_mode
+    _PARALLEL_COLLECT_BEST = collect_best
 
 
 def _parallel_should_skip(red_index: int) -> bool:
@@ -2209,6 +2218,38 @@ def witness_has_applicable_surgery(code: PDCode, result: SimplificationResult) -
     return True
 
 
+def witness_better_than(candidate: SimplificationResult, current: SimplificationResult) -> bool:
+    if not current.found:
+        return True
+    if candidate.crossing_reduction != current.crossing_reduction:
+        return candidate.crossing_reduction > current.crossing_reduction
+    if candidate.resulting_crossings != current.resulting_crossings:
+        return candidate.resulting_crossings < current.resulting_crossings
+    if len(candidate.red_path) != len(current.red_path):
+        return len(candidate.red_path) > len(current.red_path)
+    if len(candidate.green_path) != len(current.green_path):
+        return len(candidate.green_path) < len(current.green_path)
+    return False
+
+
+def score_witness_candidate(
+    code: PDCode,
+    candidate: SimplificationResult,
+    require_applicable: bool,
+) -> bool:
+    try:
+        applied_code, _crossingless = apply_simplification_witness(code, candidate, 0)
+        candidate.resulting_crossings = len(applied_code)
+        candidate.crossing_reduction = len(code) - len(applied_code)
+        return (not require_applicable) or candidate.crossing_reduction > 0
+    except Exception:
+        if require_applicable:
+            return False
+        candidate.resulting_crossings = len(code)
+        candidate.crossing_reduction = 0
+        return True
+
+
 def search_single_red_path(
     code: PDCode,
     diagram: Diagram,
@@ -2268,6 +2309,22 @@ def search_single_red_path(
             return bruteforce_budget.take()
         return True
 
+    choose_best_within_red = not (max_paths == -1 and ban_heuristic)
+
+    def consider_candidate(candidate: SimplificationResult) -> bool:
+        candidate.path_search_mode = path_search_mode
+        if not score_witness_candidate(code, candidate, require_applicable):
+            return True
+        candidate.found = True
+        if witness_better_than(candidate, outcome.witness):
+            outcome.witness = candidate
+            outcome.found = True
+        if not choose_best_within_red:
+            outcome.completed = True
+            outcome.witness.tested_green_paths = outcome.tested_green_paths
+            return False
+        return True
+
     def test_green_path(green_path: List[int]) -> bool:
         check_timeout(timeout, _timeout_deadline)
         if should_skip is not None and should_skip():
@@ -2279,38 +2336,32 @@ def search_single_red_path(
         outcome.tested_green_paths += 1
         if len(green_path) >= len(red_path):
             return True
+        candidate = SimplificationResult(path_search_mode=path_search_mode)
         if do_check(
             diagram,
             graph,
             red_path,
             green_path,
             "left",
-            outcome.witness,
+            candidate,
             timeout,
             _timeout_deadline,
         ):
-            if not require_applicable or witness_has_applicable_surgery(code, outcome.witness):
-                outcome.found = True
-                outcome.completed = True
-                outcome.witness.tested_green_paths = outcome.tested_green_paths
+            if not consider_candidate(candidate):
                 return False
-            outcome.witness = SimplificationResult(path_search_mode=path_search_mode)
+        candidate = SimplificationResult(path_search_mode=path_search_mode)
         if do_check(
             diagram,
             graph,
             red_path,
             green_path,
             "right",
-            outcome.witness,
+            candidate,
             timeout,
             _timeout_deadline,
         ):
-            if not require_applicable or witness_has_applicable_surgery(code, outcome.witness):
-                outcome.found = True
-                outcome.completed = True
-                outcome.witness.tested_green_paths = outcome.tested_green_paths
+            if not consider_candidate(candidate):
                 return False
-            outcome.witness = SimplificationResult(path_search_mode=path_search_mode)
         return True
 
     for source in sources:
@@ -2350,6 +2401,8 @@ def search_single_red_path(
 
     outcome.completed = True
     outcome.witness.tested_green_paths = outcome.tested_green_paths
+    if outcome.found:
+        outcome.witness.tested_green_paths = outcome.tested_green_paths
     return outcome
 
 
@@ -2362,9 +2415,9 @@ def _parallel_red_path_worker(red_index: int) -> RedPathSearchOutcome:
         or _PARALLEL_RED_LINES is None
     ):
         raise RuntimeError("Parallel brute-force worker was not initialized")
-    if _parallel_should_skip(red_index):
+    if not _PARALLEL_COLLECT_BEST and _parallel_should_skip(red_index):
         return RedPathSearchOutcome(skipped=True)
-    if _parallel_budget_exhausted():
+    if not _PARALLEL_COLLECT_BEST and _parallel_budget_exhausted():
         return RedPathSearchOutcome(resource_limited=True)
     outcome = search_single_red_path(
         _PARALLEL_CODE,
@@ -2375,13 +2428,13 @@ def _parallel_red_path_worker(red_index: int) -> RedPathSearchOutcome:
         ban_heuristic=_PARALLEL_BAN_HEURISTIC,
         require_applicable=_PARALLEL_REQUIRE_APPLICABLE,
         path_search_mode=_PARALLEL_PATH_SEARCH_MODE,
-        should_skip=lambda: _parallel_should_skip(red_index),
+        should_skip=None if _PARALLEL_COLLECT_BEST else lambda: _parallel_should_skip(red_index),
         take_budget=_parallel_take_budget if _PARALLEL_BAN_HEURISTIC else None,
         budget_exhausted=_parallel_budget_exhausted if _PARALLEL_BAN_HEURISTIC else None,
         timeout=_PARALLEL_TIMEOUT,
         _timeout_deadline=_PARALLEL_TIMEOUT_DEADLINE,
     )
-    if outcome.found:
+    if outcome.found and not _PARALLEL_COLLECT_BEST:
         _parallel_record_found(red_index)
     return outcome
 
@@ -2434,6 +2487,151 @@ def merge_red_path_outcomes(
         )
         return witness
     return result
+
+
+def merge_best_red_path_batch(
+    outcomes: List[RedPathSearchOutcome],
+    path_search_mode: str,
+) -> SimplificationResult:
+    result = SimplificationResult(path_search_mode=path_search_mode)
+    best_found = -1
+    for index, outcome in enumerate(outcomes):
+        if outcome.resource_limited:
+            result.resource_limited = True
+        if (
+            not outcome.completed
+            and not outcome.found
+            and not outcome.resource_limited
+            and not outcome.skipped
+        ):
+            raise RuntimeError(
+                f"Parallel heuristic search did not complete red path batch entry {index}"
+            )
+        if (
+            outcome.completed
+            or outcome.found
+            or outcome.resource_limited
+            or outcome.tested_green_paths > 0
+        ):
+            result.tested_red_paths += 1
+        result.tested_green_paths += outcome.tested_green_paths
+        if outcome.found and (
+            best_found < 0
+            or witness_better_than(outcome.witness, outcomes[best_found].witness)
+        ):
+            best_found = index
+
+    if best_found >= 0:
+        witness = outcomes[best_found].witness
+        witness.path_search_mode = path_search_mode
+        witness.tested_red_paths = result.tested_red_paths
+        witness.tested_green_paths = result.tested_green_paths
+        witness.resource_limited = result.resource_limited
+        return witness
+    return result
+
+
+def find_simplification_parallel_heuristic_batches(
+    code: PDCode,
+    red_lines: List[List[Endpoint]],
+    require_applicable: bool,
+    worker_count: int,
+    max_paths: int,
+    ban_heuristic: bool,
+    path_search_mode: str,
+    bruteforce_budget: int = DEFAULT_BRUTEFORCE_BUDGET,
+    timeout: int = -1,
+    _timeout_deadline: Optional[float] = None,
+) -> SimplificationResult:
+    check_timeout(timeout, _timeout_deadline)
+    aggregate = SimplificationResult(path_search_mode=path_search_mode)
+    if not red_lines:
+        return aggregate
+    best_witness = SimplificationResult(path_search_mode=path_search_mode)
+    batches_since_best = 0
+    with multiprocessing.Manager() as manager:
+        best_index = manager.Value("i", len(red_lines))
+        best_lock = manager.Lock()
+        budget_used = manager.Value("q", 0)
+        budget_lock = manager.Lock()
+        executor: Optional[concurrent.futures.ProcessPoolExecutor] = None
+        try:
+            executor = concurrent.futures.ProcessPoolExecutor(
+                max_workers=worker_count,
+                initializer=_parallel_bruteforce_initializer,
+                initargs=(
+                    code,
+                    red_lines,
+                    require_applicable,
+                    best_index,
+                    best_lock,
+                    bruteforce_budget,
+                    budget_used,
+                    budget_lock,
+                    timeout,
+                    _timeout_deadline,
+                    max_paths,
+                    ban_heuristic,
+                    path_search_mode,
+                    True,
+                ),
+            )
+            for batch_start in range(0, len(red_lines), worker_count):
+                check_timeout(timeout, _timeout_deadline)
+                batch_indices = list(
+                    range(batch_start, min(len(red_lines), batch_start + worker_count))
+                )
+                futures = [
+                    executor.submit(_parallel_red_path_worker, index)
+                    for index in batch_indices
+                ]
+                outcomes: List[RedPathSearchOutcome] = [
+                    RedPathSearchOutcome() for _ in batch_indices
+                ]
+                for local_index, future in enumerate(futures):
+                    check_timeout(timeout, _timeout_deadline)
+                    try:
+                        outcomes[local_index] = future.result(
+                            timeout=remaining_timeout_seconds(timeout, _timeout_deadline)
+                        )
+                    except concurrent.futures.TimeoutError as exc:
+                        raise PdCodeSimplifyTimeoutError(
+                            f"timeout after {timeout} seconds"
+                        ) from exc
+                batch = merge_best_red_path_batch(outcomes, path_search_mode)
+                aggregate.tested_red_paths += batch.tested_red_paths
+                aggregate.tested_green_paths += batch.tested_green_paths
+                aggregate.resource_limited = (
+                    aggregate.resource_limited or batch.resource_limited
+                )
+                if batch.found:
+                    if witness_better_than(batch, best_witness):
+                        best_witness = batch
+                        batches_since_best = 0
+                    elif best_witness.found:
+                        batches_since_best += 1
+                elif best_witness.found:
+                    batches_since_best += 1
+                if best_witness.found and (
+                    batches_since_best >= HEURISTIC_BEST_LOOKAHEAD_BATCHES
+                    or batch_indices[-1] == len(red_lines) - 1
+                    or aggregate.resource_limited
+                ):
+                    best_witness.tested_red_paths = aggregate.tested_red_paths
+                    best_witness.tested_green_paths = aggregate.tested_green_paths
+                    best_witness.resource_limited = aggregate.resource_limited
+                    return best_witness
+                if aggregate.resource_limited:
+                    return aggregate
+        except (KeyboardInterrupt, PdCodeSimplifyTimeoutError):
+            if executor is not None:
+                terminate_process_pool(executor)
+                executor = None
+            raise
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True, cancel_futures=True)
+    return aggregate
 
 
 def find_simplification_parallel_red_paths(
@@ -2577,6 +2775,17 @@ def find_simplification(
     base_graph = DualGraph(diagram)
     check_timeout(timeout, deadline)
     red_lines = possible_red_lines(diagram)
+    heuristic_mode = max_paths == -1 and not ban_heuristic
+    if heuristic_mode:
+        red_lines.sort(
+            key=lambda line: (
+                -len(line),
+                line[0].crossing,
+                line[0].strand,
+                line[-1].crossing,
+                line[-1].strand,
+            )
+        )
     check_timeout(timeout, deadline)
     if max_paths == -1:
         worker_count = selected_bruteforce_worker_count(max_thread, len(red_lines))
@@ -2601,6 +2810,21 @@ def find_simplification(
                 ),
             )
         if worker_count > 1:
+            if heuristic_mode:
+                return store_and_return(
+                    find_simplification_parallel_heuristic_batches(
+                        code,
+                        red_lines,
+                        require_applicable,
+                        worker_count,
+                        max_paths,
+                        ban_heuristic,
+                        result.path_search_mode,
+                        bruteforce_budget,
+                        timeout,
+                        deadline,
+                    )
+                )
             return store_and_return(
                 find_simplification_parallel_red_paths(
                     code,
@@ -2621,6 +2845,8 @@ def find_simplification(
         if max_paths == -1 and ban_heuristic
         else None
     )
+    best_witness = SimplificationResult(path_search_mode=result.path_search_mode)
+    red_paths_since_best = 0
     for red_index, red_path in enumerate(red_lines):
         check_timeout(timeout, deadline)
         if verbose and (red_index == 0 or red_index % 1024 == 0):
@@ -2658,8 +2884,35 @@ def find_simplification(
             witness.tested_red_paths = result.tested_red_paths
             witness.tested_green_paths = result.tested_green_paths
             witness.resource_limited = outcome.resource_limited
+            if heuristic_mode:
+                if witness_better_than(witness, best_witness):
+                    best_witness = witness
+                    red_paths_since_best = 0
+                elif best_witness.found:
+                    red_paths_since_best += 1
+                if (
+                    best_witness.found
+                    and red_paths_since_best >= HEURISTIC_BEST_LOOKAHEAD_BATCHES
+                ):
+                    best_witness.tested_red_paths = result.tested_red_paths
+                    best_witness.tested_green_paths = result.tested_green_paths
+                    best_witness.resource_limited = result.resource_limited
+                    return store_and_return(best_witness)
+                continue
             return store_and_return(witness)
+        if heuristic_mode and best_witness.found:
+            red_paths_since_best += 1
+            if red_paths_since_best >= HEURISTIC_BEST_LOOKAHEAD_BATCHES:
+                best_witness.tested_red_paths = result.tested_red_paths
+                best_witness.tested_green_paths = result.tested_green_paths
+                best_witness.resource_limited = result.resource_limited
+                return store_and_return(best_witness)
 
+    if heuristic_mode and best_witness.found:
+        best_witness.tested_red_paths = result.tested_red_paths
+        best_witness.tested_green_paths = result.tested_green_paths
+        best_witness.resource_limited = result.resource_limited
+        return store_and_return(best_witness)
     return store_and_return(result)
 
 
@@ -3518,7 +3771,6 @@ def _single_small_determinant_value(fingerprint: Sequence[int]) -> int:
 class ReaprInvariantProfile:
     components: int = 0
     determinant_fingerprint: Tuple[int, ...] = ()
-    goeritz_signature_pair: Tuple[int, ...] = ()
     alexander_roots_evaluated: bool = False
     alexander_roots_mod_11: Tuple[int, ...] = ()
     alexander_roots_mod_19: Tuple[int, ...] = ()
@@ -3527,176 +3779,6 @@ class ReaprInvariantProfile:
 
 def _int_vector_string(values: Sequence[int]) -> str:
     return "[" + ",".join(str(value) for value in values) + "]"
-
-
-def _checkerboard_face_colors(graph: DualGraph) -> List[int]:
-    colors = [-1 for _ in graph.faces]
-    for start in range(len(colors)):
-        if colors[start] != -1:
-            continue
-        colors[start] = 0
-        frontier: Deque[int] = deque([start])
-        while frontier:
-            face = frontier.popleft()
-            for edge_index in graph.adjacency[face]:
-                edge = graph.edges[edge_index]
-                neighbor = edge.v if edge.u == face else edge.u
-                expected = 1 - colors[face]
-                if colors[neighbor] == -1:
-                    colors[neighbor] = expected
-                    frontier.append(neighbor)
-    return colors
-
-
-def _swap_symmetric_rows_and_columns(matrix: List[List[float]], first: int, second: int) -> None:
-    if first == second:
-        return
-    matrix[first], matrix[second] = matrix[second], matrix[first]
-    for row in matrix:
-        row[first], row[second] = row[second], row[first]
-
-
-def _symmetric_matrix_signature(matrix: List[List[float]]) -> int:
-    eps = 1e-10
-    size = len(matrix)
-    positive = 0
-    negative = 0
-    index = 0
-    while index < size:
-        diagonal_pivot = -1
-        for candidate in range(index, size):
-            if abs(matrix[candidate][candidate]) > eps:
-                diagonal_pivot = candidate
-                break
-        if diagonal_pivot != -1:
-            _swap_symmetric_rows_and_columns(matrix, index, diagonal_pivot)
-            pivot = matrix[index][index]
-            if pivot > 0:
-                positive += 1
-            else:
-                negative += 1
-            for row in range(index + 1, size):
-                for column in range(row, size):
-                    matrix[row][column] -= matrix[row][index] * matrix[index][column] / pivot
-                    matrix[column][row] = matrix[row][column]
-            index += 1
-            continue
-
-        first = -1
-        second = -1
-        for row in range(index, size):
-            if first != -1:
-                break
-            for column in range(row + 1, size):
-                if abs(matrix[row][column]) > eps:
-                    first = row
-                    second = column
-                    break
-        if first == -1:
-            break
-        _swap_symmetric_rows_and_columns(matrix, index, first)
-        _swap_symmetric_rows_and_columns(matrix, index + 1, second)
-
-        a = matrix[index][index]
-        b = matrix[index][index + 1]
-        d = matrix[index + 1][index + 1]
-        determinant = a * d - b * b
-        if abs(determinant) <= eps:
-            break
-        if determinant < 0:
-            positive += 1
-            negative += 1
-        elif a + d > 0:
-            positive += 2
-        else:
-            negative += 2
-
-        inverse00 = d / determinant
-        inverse01 = -b / determinant
-        inverse11 = a / determinant
-        for row in range(index + 2, size):
-            vi0 = matrix[row][index]
-            vi1 = matrix[row][index + 1]
-            for column in range(row, size):
-                vj0 = matrix[index][column]
-                vj1 = matrix[index + 1][column]
-                correction = (
-                    vi0 * (inverse00 * vj0 + inverse01 * vj1)
-                    + vi1 * (inverse01 * vj0 + inverse11 * vj1)
-                )
-                matrix[row][column] -= correction
-                matrix[column][row] = matrix[row][column]
-        index += 2
-    return positive - negative
-
-
-def _goeritz_signature_for_color(
-    diagram: Diagram,
-    graph: DualGraph,
-    face_colors: Sequence[int],
-    selected_color: int,
-) -> int:
-    selected_faces = [
-        face for face, color in enumerate(face_colors) if color == selected_color
-    ]
-    if not selected_faces:
-        return 0
-    face_to_matrix = [-2 for _ in graph.faces]
-    for index, face in enumerate(selected_faces[1:]):
-        face_to_matrix[face] = index
-    matrix_size = len(selected_faces) - 1
-    matrix = [[0.0 for _ in range(matrix_size)] for _ in range(matrix_size)]
-    correction = 0
-
-    for crossing in range(len(diagram.code)):
-        faces = [
-            graph.edge_to_face[Endpoint(crossing, strand).key]
-            for strand in range(4)
-        ]
-        first_face = -1
-        second_face = -1
-        eta = 0
-        if face_colors[faces[0]] == selected_color and face_colors[faces[2]] == selected_color:
-            first_face = faces[0]
-            second_face = faces[2]
-            eta = diagram.signs[crossing]
-        elif face_colors[faces[1]] == selected_color and face_colors[faces[3]] == selected_color:
-            first_face = faces[1]
-            second_face = faces[3]
-            eta = -diagram.signs[crossing]
-        else:
-            continue
-
-        if eta == diagram.signs[crossing]:
-            correction += eta
-
-        if first_face == second_face:
-            continue
-        first_index = face_to_matrix[first_face]
-        second_index = face_to_matrix[second_face]
-        if first_index >= 0:
-            matrix[first_index][first_index] += eta
-        if second_index >= 0:
-            matrix[second_index][second_index] += eta
-        if first_index >= 0 and second_index >= 0:
-            matrix[first_index][second_index] -= eta
-            matrix[second_index][first_index] -= eta
-
-    return _symmetric_matrix_signature(matrix) - correction
-
-
-def _goeritz_signature_pair(raw_code: PDCode) -> Tuple[int, ...]:
-    if not raw_code:
-        return (0, 0)
-    code = _canonical_output_code(raw_code)
-    diagram = Diagram(code)
-    graph = DualGraph(diagram)
-    face_colors = _checkerboard_face_colors(graph)
-    signatures = [
-        _goeritz_signature_for_color(diagram, graph, face_colors, 0),
-        _goeritz_signature_for_color(diagram, graph, face_colors, 1),
-    ]
-    return tuple(sorted(signatures))
 
 
 def _alexander_roots_mod_prime(
@@ -3780,7 +3862,6 @@ def _reapr_invariant_profile(
     profile = ReaprInvariantProfile(
         components=analyze_components(code, crossingless_components).total_components,
         determinant_fingerprint=tuple(_alexander_determinant_fingerprint(code)),
-        goeritz_signature_pair=_goeritz_signature_pair(code),
     )
     if include_alexander_roots:
         profile.alexander_roots_evaluated = True
@@ -3797,7 +3878,6 @@ def _reapr_basic_profiles_equal(
     return (
         before.components == after.components
         and before.determinant_fingerprint == after.determinant_fingerprint
-        and before.goeritz_signature_pair == after.goeritz_signature_pair
     )
 
 
@@ -3832,7 +3912,6 @@ def _reapr_invariant_profile_string(profile: ReaprInvariantProfile) -> str:
     return (
         f"components={profile.components}; "
         f"determinant={_determinant_fingerprint_string(profile.determinant_fingerprint)}; "
-        f"goeritz_signature_pair={_int_vector_string(profile.goeritz_signature_pair)}; "
         f"{roots}"
     )
 
@@ -4228,6 +4307,7 @@ def reduce_pd_code(
     max_thread: int = -1,
     bruteforce_budget: int = DEFAULT_BRUTEFORCE_BUDGET,
     timeout: int = -1,
+    quit_at_crossing: int = -1,
     verbose: bool = False,
     progress: Optional[Callable[[str], None]] = None,
     show_step_pd: bool = False,
@@ -4239,6 +4319,8 @@ def reduce_pd_code(
     if max_thread < -1 or max_thread == 0:
         raise ValueError("max_thread must be -1 or a positive integer")
     validate_bruteforce_budget(bruteforce_budget)
+    if quit_at_crossing < -1:
+        raise ValueError("quit_at_crossing must be -1 or a non-negative integer")
     if reapr_retry_max < 0:
         raise ValueError("reapr_retry_max must be a non-negative integer")
     deadline = timeout_deadline(timeout, _timeout_deadline)
@@ -4246,6 +4328,21 @@ def reduce_pd_code(
         code=[list(crossing) for crossing in code],
         crossingless_components=known_crossingless_components,
     )
+    def stop_if_quit_at_crossing(stage: str) -> bool:
+        if quit_at_crossing < 0 or len(output.code) > quit_at_crossing:
+            return False
+        output.stopped_by_crossing_limit = True
+        _emit_progress(
+            verbose,
+            progress,
+            (
+                f"{stage} stop_quit_at_crossing threshold={quit_at_crossing} "
+                f"crossings={len(output.code)} "
+                f"crossingless_components={output.crossingless_components}"
+            ),
+        )
+        return True
+
     try:
         check_timeout(timeout, deadline)
         _emit_progress(
@@ -4256,7 +4353,7 @@ def reduce_pd_code(
                 f"known_crossingless_components={known_crossingless_components} "
                 f"reduction_round={reduction_round} max_paths={max_paths} "
                 f"max_thread={max_thread} bruteforce_budget={bruteforce_budget} "
-                f"timeout={timeout} "
+                f"timeout={timeout} quit_at_crossing={quit_at_crossing} "
                 f"heuristic={'off' if ban_heuristic else 'on'} "
                 f"reapr={'on' if reapr else 'off'} "
                 f"reapr_retry_max={reapr_retry_max}"
@@ -4282,7 +4379,9 @@ def reduce_pd_code(
             ),
         )
 
-        if reapr:
+        stop_if_quit_at_crossing("pre_simplify")
+
+        if not output.stopped_by_crossing_limit and reapr:
             _emit_progress(
                 verbose,
                 progress,
@@ -4324,6 +4423,7 @@ def reduce_pd_code(
                 output.reidemeister_i_moves += prepared.reidemeister_i_moves
                 output.reidemeister_ii_moves += prepared.reidemeister_ii_moves
                 output.nugatory_crossing_moves += prepared.nugatory_crossing_moves
+                stop_if_quit_at_crossing("reapr_oracle")
             _emit_progress(
                 verbose,
                 progress,
@@ -4340,7 +4440,10 @@ def reduce_pd_code(
                 ),
             )
 
-        while reduction_round < 0 or output.mid_simplification_rounds < reduction_round:
+        while (
+            not output.stopped_by_crossing_limit
+            and (reduction_round < 0 or output.mid_simplification_rounds < reduction_round)
+        ):
             check_timeout(timeout, deadline)
             round_index = output.mid_simplification_rounds + 1
             if max_paths == -1 and not ban_heuristic:
@@ -4384,6 +4487,8 @@ def reduce_pd_code(
                     output.reidemeister_ii_moves += r3_prepass.reidemeister_ii_moves
                     output.reidemeister_iii_moves += r3_prepass.reidemeister_iii_moves
                     output.nugatory_crossing_moves += r3_prepass.nugatory_crossing_moves
+                    if stop_if_quit_at_crossing("r3_prepass"):
+                        break
                     continue
 
             output.last_path_search_mode = _search_mode(max_paths, ban_heuristic)
@@ -4508,6 +4613,10 @@ def reduce_pd_code(
                                 f"nugatory_moves={step.nugatory_crossing_moves}"
                             ),
                         )
+                        if stop_if_quit_at_crossing("non_monotone"):
+                            break
+                    if output.stopped_by_crossing_limit:
+                        break
                     continue
 
                 output.last_path_search_mode = _search_mode(-1, True)
@@ -4603,6 +4712,8 @@ def reduce_pd_code(
                     output.reidemeister_ii_moves += r3.reidemeister_ii_moves
                     output.reidemeister_iii_moves += r3.reidemeister_iii_moves
                     output.nugatory_crossing_moves += r3.nugatory_crossing_moves
+                    if stop_if_quit_at_crossing("r3_failover"):
+                        break
                     continue
 
                 _emit_progress(
@@ -4644,6 +4755,7 @@ def reduce_pd_code(
                     f"nugatory_moves={prepared.nugatory_crossing_moves}"
                 ),
             )
+            stop_if_quit_at_crossing("mid_simplification")
     except PdCodeSimplifyTimeoutError as exc:
         output.timed_out = True
         _emit_progress(
@@ -4659,6 +4771,7 @@ def reduce_pd_code(
     output.stopped_by_round_limit = (
         not output.timed_out
         and not output.resource_limited
+        and not output.stopped_by_crossing_limit
         and reduction_round >= 0
         and output.mid_simplification_rounds >= reduction_round
     )
@@ -4675,6 +4788,7 @@ def reduce_pd_code(
             f"r2_moves={output.reidemeister_ii_moves} "
             f"r3_moves={output.reidemeister_iii_moves} "
             f"stopped_by_round_limit={'yes' if output.stopped_by_round_limit else 'no'} "
+            f"stopped_by_crossing_limit={'yes' if output.stopped_by_crossing_limit else 'no'} "
             f"timed_out={'yes' if output.timed_out else 'no'} "
             f"resource_limited={'yes' if output.resource_limited else 'no'}"
         ),
@@ -4784,6 +4898,7 @@ def run_job(
     max_thread: int = -1,
     bruteforce_budget: int = DEFAULT_BRUTEFORCE_BUDGET,
     timeout: int = -1,
+    quit_at_crossing: int = -1,
     known_crossingless_components: int = 0,
     removed_crossings: Optional[Sequence[int]] = None,
     verbose: bool = False,
@@ -4815,6 +4930,7 @@ def run_job(
             max_thread=max_thread,
             bruteforce_budget=bruteforce_budget,
             timeout=timeout,
+            quit_at_crossing=quit_at_crossing,
             verbose=verbose,
             progress=lambda message: print(
                 format_progress_log(f"{job.label}: {message}"), file=sys.stderr
@@ -4891,6 +5007,7 @@ def print_text_result(
     print(f"reapr_invariants_before: {result.reapr_invariants_before}")
     print(f"reapr_invariants_after: {result.reapr_invariants_after}")
     print(f"stopped_by_round_limit: {'yes' if result.stopped_by_round_limit else 'no'}")
+    print(f"stopped_by_crossing_limit: {'yes' if result.stopped_by_crossing_limit else 'no'}")
     print(f"timed_out: {'yes' if result.timed_out else 'no'}")
     print(f"resource_limited: {'yes' if result.resource_limited else 'no'}")
 
@@ -4952,6 +5069,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=-1,
         help="per-PD-code timeout in seconds, or -1 for no timeout",
+    )
+    parser.add_argument(
+        "--quit-at-crossing",
+        type=int,
+        default=-1,
+        help="stop once crossings are at most N, or -1 to disable",
     )
     parser.add_argument(
         "--known-crossingless-components",
@@ -5026,6 +5149,8 @@ def main_impl(argv: Sequence[str]) -> int:
         parser.error("--bruteforce-budget must be -1 or a positive integer")
     if args.timeout < -1 or args.timeout == 0:
         parser.error("--timeout must be -1 or a positive integer")
+    if args.quit_at_crossing < -1:
+        parser.error("--quit-at-crossing must be -1 or a non-negative integer")
     if args.reapr_retry_max < 0:
         parser.error("--reapr-retry-max must be a non-negative integer")
     jobs = collect_jobs(args)
@@ -5046,6 +5171,7 @@ def main_impl(argv: Sequence[str]) -> int:
                     max_thread=args.max_thread,
                     bruteforce_budget=args.bruteforce_budget,
                     timeout=args.timeout,
+                    quit_at_crossing=args.quit_at_crossing,
                     known_crossingless_components=args.known_crossingless_components,
                     removed_crossings=removed_crossings,
                     verbose=args.verbose,
@@ -5095,6 +5221,7 @@ def main_impl(argv: Sequence[str]) -> int:
                     max_thread=args.max_thread,
                     bruteforce_budget=args.bruteforce_budget,
                     timeout=args.timeout,
+                    quit_at_crossing=args.quit_at_crossing,
                     known_crossingless_components=args.known_crossingless_components,
                     removed_crossings=removed_crossings,
                     verbose=args.verbose,

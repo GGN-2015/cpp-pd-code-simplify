@@ -100,6 +100,7 @@ component.
 --reapr                        Enable the experimental invariant-guarded projection oracle.
 --reapr-retry-max N            Maximum deterministic REAPR attempts; default 3.
 --timeout K                    Per-PD-code timeout in seconds; -1 means no timeout.
+--quit-at-crossing N           Stop once crossings are at most N; -1 disables it.
 --verbose                      Print timestamped progress logs to stderr.
 --show-step-pd                 Print post-witness and accepted REAPR PD codes to stdout.
 --log-file FILEPATH            Tee stdout and stderr output into a flushed log file.
@@ -110,9 +111,12 @@ component.
 ```
 
 `--max-paths -1` is the default. In that mode the executable uses deterministic
-heuristic green-path sampling. Add `--ban-heuristic` to run exhaustive
-green-path enumeration instead. If `--max-paths` is any other integer, the
-legacy bounded DFS ordering is used.
+heuristic green-path sampling. Heuristic mode orders longer red arcs first,
+scores validated witnesses by the actual crossing reduction obtained after
+temporarily applying them, and uses a fixed bounded lookahead before choosing
+which witness to apply. Add `--ban-heuristic` to run exhaustive green-path
+enumeration instead. If `--max-paths` is any other integer, the legacy bounded
+DFS ordering is used.
 
 Brute-force green-path enumeration is streamed: each candidate path is checked
 as soon as it is generated, so the implementation does not keep the full set of
@@ -149,8 +153,8 @@ invariant profile is unchanged. It also uses a conservative step window: for
 `n` current crossings, the raw candidate and its R1/R2/nugatory cleanup must
 both keep at least `n - ceil(n / 4)` crossings. Accepted candidates
 return to the normal iterative simplification loop. The profile includes total
-component count, Alexander determinant, Goeritz signature, and Alexander roots
-over `F_11`, `F_19`, and `F_31`. This guard is stricter than determinant
+component count, Alexander determinant, and Alexander roots over `F_11`,
+`F_19`, and `F_31`. This guard is stricter than determinant
 alone, but it is not a proof that the output is the same knot or link. Output
 therefore includes `reapr_used`, `reapr_status`, `reapr_warning`,
 `alexander_determinant_before`, `alexander_determinant_after`,
@@ -164,6 +168,12 @@ after a rejected first template. `N=0` disables REAPR candidate attempts.
 `K` seconds and still prints the best PD code found so far. JSON and text
 output include `timed_out`; in batch mode, later jobs continue. Pressing
 `Ctrl+C` requests cooperative cancellation and exits with status `130`.
+
+`--quit-at-crossing -1` is the default and disables crossing-target early
+exit. `--quit-at-crossing N`, where `N` is a non-negative integer, stops the
+current job as soon as the current PD code has at most `N` crossings, even if
+later rounds might simplify further. Output includes
+`stopped_by_crossing_limit`.
 
 `--show-step-pd` prints `step_pd_code[ROUND]: PD[...]` immediately after each
 mid-simplification witness is applied and canonicalized, before the automatic

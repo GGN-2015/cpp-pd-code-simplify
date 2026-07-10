@@ -36,7 +36,10 @@ heuristic mode. Every generated PD code is canonicalized
 immediately after it is produced, including after each local cleanup deletion
 and after every applied witness. Use `--timeout K` to cap each PD-code job at
 `K` seconds; the default `-1` has no timeout. A timed-out job returns the best
-PD code found so far and sets `timed_out` in JSON/text output. Brute-force
+PD code found so far and sets `timed_out` in JSON/text output.
+Use `--quit-at-crossing N` to stop early once the current PD code has at most
+`N` crossings; the default `-1` disables this and output sets
+`stopped_by_crossing_limit` when the threshold is reached. Brute-force
 green-path enumeration is streamed rather than stored in one large list; use
 `--bruteforce-budget N` to cap brute-force green-path checks per PD code. The
 default is `200000`, and `-1` disables that cap. A budget stop returns the
@@ -59,8 +62,8 @@ This diagnostic output is disabled by default because it can be large and
 shares stdout with JSON/text results.
 Use `--reapr` to enable the same experimental invariant-guarded projection
 oracle as the C++ implementation. It checks component count, Alexander
-determinant, Goeritz signature, and Alexander roots over `F_11`, `F_19`, and
-`F_31` before accepting a candidate. The oracle is conservative: for `n`
+determinant, and Alexander roots over `F_11`, `F_19`, and `F_31` before
+accepting a candidate. The oracle is conservative: for `n`
 current crossings, the raw candidate and its R1/R2/nugatory cleanup must both
 keep at least `n - ceil(n / 4)` crossings, and accepted candidates
 return to the normal iterative simplification loop. It is disabled by default
@@ -88,8 +91,11 @@ print(result.to_json()["final_pd_code"])
 
 `find_simplification` defaults to `max_paths=-1`, which uses deterministic
 heuristic green-path sampling. Pass `ban_heuristic=True` with `max_paths=-1`
-to enumerate all green paths for a manageable input. `reduce_pd_code` is the
-high-level API that applies witnesses and returns the internal final PD code.
+to enumerate all green paths for a manageable input. Heuristic mode tries
+longer red arcs first, scores validated witnesses by the actual crossing
+reduction obtained after temporary application, and uses a fixed bounded
+lookahead before applying the best candidate. `reduce_pd_code` is the high-level
+API that applies witnesses and returns the internal final PD code.
 The Python prototype uses the same deterministic non-monotone failover as the
 C++ implementation; repeated no-timeout searches inside one Python process
 cache exact search results for identical canonical PD codes and search
@@ -101,6 +107,8 @@ If `reduce_pd_code(..., timeout=K)` exceeds its deadline, it returns the
 current best result with `result.timed_out == True`.
 If `reduce_pd_code(..., bruteforce_budget=N)` exhausts its brute-force budget,
 it returns the current best result with `result.resource_limited == True`.
+Pass `quit_at_crossing=N` to stop once the current PD code has at most `N`
+crossings; `-1` disables the threshold.
 Pass `show_step_pd=True` to `reduce_pd_code` to print each post-witness PD
 code and each accepted REAPR candidate, or pass `step_pd_output=callable` to
 receive `(round_index, code)` in Python code.
@@ -135,11 +143,12 @@ Run Python-only prototype checks, including crossingless component accounting:
 .\.venv\Scripts\python tools\test_python_prototype.py
 ```
 
-Run randomized Khovanov-homology invariance checks. This uses
-`cppkh-interface` to compare the input PD code and the simplified output:
+Run randomized invariant-profile checks. This compares component count,
+Alexander determinant fingerprint, and Alexander root sets modulo 11, 19, and
+31 for the input and simplified output:
 
 ```sh
-.\.venv\Scripts\python tools\test_random_khovanov_invariance.py --include-interface
+.\.venv\Scripts\python tools\test_random_invariant_profile.py --include-interface
 ```
 
 ## Benchmarks

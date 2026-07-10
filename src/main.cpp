@@ -154,6 +154,7 @@ void print_help(const char* program) {
         << "Use --ban-heuristic to force brute-force green-path enumeration.\n"
         << "Use --max-thread N to cap brute-force worker threads; -1 means auto.\n"
         << "Use --bruteforce-budget N to cap brute-force green-path checks; -1 means no cap.\n"
+        << "Use --quit-at-crossing N to stop once crossings are at most N; -1 disables it.\n"
         << "Use --reapr to enable the experimental invariant-guarded projection oracle.\n"
         << "Use --reapr-retry-max N to cap deterministic REAPR retry attempts; default is 3.\n"
         << "Use --timeout K to cap each PD-code job in seconds; -1 means no timeout.\n"
@@ -468,6 +469,8 @@ void print_text_result(
               << result.reapr_invariants_after << '\n';
     std::cout << "stopped_by_round_limit: "
               << (result.stopped_by_round_limit ? "yes" : "no") << '\n';
+    std::cout << "stopped_by_crossing_limit: "
+              << (result.stopped_by_crossing_limit ? "yes" : "no") << '\n';
     std::cout << "timed_out: " << (result.timed_out ? "yes" : "no") << '\n';
     std::cout << "resource_limited: " << (result.resource_limited ? "yes" : "no") << '\n';
 }
@@ -568,6 +571,8 @@ void print_json_result(
               << json_escape(result.reapr_invariants_after) << "\",\n";
     std::cout << "  \"stopped_by_round_limit\": "
               << (result.stopped_by_round_limit ? "true" : "false") << ",\n";
+    std::cout << "  \"stopped_by_crossing_limit\": "
+              << (result.stopped_by_crossing_limit ? "true" : "false") << ",\n";
     std::cout << "  \"timed_out\": "
               << (result.timed_out ? "true" : "false") << ",\n";
     std::cout << "  \"resource_limited\": "
@@ -686,6 +691,14 @@ int main(int argc, char** argv) {
                 options.timeout_seconds = std::stoi(argv[++i]);
                 if (options.timeout_seconds < -1 || options.timeout_seconds == 0) {
                     throw std::invalid_argument("--timeout must be -1 or a positive integer");
+                }
+            } else if (arg == "--quit-at-crossing") {
+                if (i + 1 >= argc) {
+                    throw std::invalid_argument("--quit-at-crossing requires a value");
+                }
+                options.quit_at_crossing = std::stoi(argv[++i]);
+                if (options.quit_at_crossing < -1) {
+                    throw std::invalid_argument("--quit-at-crossing must be -1 or a nonnegative integer");
                 }
             } else if (arg == "--reduction-round") {
                 if (i + 1 >= argc) {

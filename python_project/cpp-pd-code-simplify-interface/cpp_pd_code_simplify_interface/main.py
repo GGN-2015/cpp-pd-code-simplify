@@ -882,6 +882,7 @@ def _load_library() -> ctypes.CDLL:
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_int,
+        ctypes.c_int,
         ctypes.c_ulonglong,
         ctypes.POINTER(ctypes.c_int),
         ctypes.c_ulonglong,
@@ -904,6 +905,7 @@ def _run_one_direct(
     max_thread: int = -1,
     bruteforce_budget: int = 200000,
     timeout: int = -1,
+    quit_at_crossing: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
     reapr: bool = False,
@@ -920,6 +922,8 @@ def _run_one_direct(
         raise ValueError("bruteforce_budget must be -1 or a positive integer")
     if timeout < -1 or timeout == 0:
         raise ValueError("timeout must be -1 or a positive integer")
+    if quit_at_crossing < -1:
+        raise ValueError("quit_at_crossing must be -1 or a non-negative integer")
     if reapr_retry_max < 0:
         raise ValueError("reapr_retry_max must be a non-negative integer")
     library = _load_library()
@@ -937,6 +941,7 @@ def _run_one_direct(
         int(max_thread),
         int(bruteforce_budget),
         int(timeout),
+        int(quit_at_crossing),
         1 if verbose else 0,
         1 if show_step_pd else 0,
         1 if reapr else 0,
@@ -982,6 +987,7 @@ def _run_one(
     max_thread: int = -1,
     bruteforce_budget: int = 200000,
     timeout: int = -1,
+    quit_at_crossing: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
     reapr: bool = False,
@@ -998,6 +1004,8 @@ def _run_one(
         raise ValueError("bruteforce_budget must be -1 or a positive integer")
     if timeout < -1 or timeout == 0:
         raise ValueError("timeout must be -1 or a positive integer")
+    if quit_at_crossing < -1:
+        raise ValueError("quit_at_crossing must be -1 or a non-negative integer")
     if reapr_retry_max < 0:
         raise ValueError("reapr_retry_max must be a non-negative integer")
 
@@ -1009,6 +1017,7 @@ def _run_one(
         "max_thread": int(max_thread),
         "bruteforce_budget": int(bruteforce_budget),
         "timeout": int(timeout),
+        "quit_at_crossing": int(quit_at_crossing),
         "verbose": bool(verbose),
         "show_step_pd": bool(show_step_pd),
         "reapr": bool(reapr),
@@ -1094,6 +1103,7 @@ def simplify(
     max_thread: int = -1,
     bruteforce_budget: int = 200000,
     timeout: int = -1,
+    quit_at_crossing: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
     reapr: bool = False,
@@ -1114,6 +1124,7 @@ def simplify(
             max_thread=max_thread,
             bruteforce_budget=bruteforce_budget,
             timeout=timeout,
+            quit_at_crossing=quit_at_crossing,
             verbose=verbose,
             show_step_pd=show_step_pd,
             reapr=reapr,
@@ -1133,6 +1144,7 @@ def simplify_many(
     max_thread: int = -1,
     bruteforce_budget: int = 200000,
     timeout: int = -1,
+    quit_at_crossing: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
     reapr: bool = False,
@@ -1154,6 +1166,7 @@ def simplify_many(
                 max_thread=max_thread,
                 bruteforce_budget=bruteforce_budget,
                 timeout=timeout,
+                quit_at_crossing=quit_at_crossing,
                 verbose=verbose,
                 show_step_pd=show_step_pd,
                 reapr=reapr,
@@ -1188,6 +1201,7 @@ def _main_impl(argv: Sequence[str]) -> int:
     parser.add_argument("--max-thread", type=int, default=-1)
     parser.add_argument("--bruteforce-budget", type=int, default=200000)
     parser.add_argument("--timeout", type=int, default=-1)
+    parser.add_argument("--quit-at-crossing", type=int, default=-1)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--show-step-pd", action="store_true")
     parser.add_argument(
@@ -1208,6 +1222,8 @@ def _main_impl(argv: Sequence[str]) -> int:
         parser.error("--bruteforce-budget must be -1 or a positive integer")
     if args.timeout < -1 or args.timeout == 0:
         parser.error("--timeout must be -1 or a positive integer")
+    if args.quit_at_crossing < -1:
+        parser.error("--quit-at-crossing must be -1 or a non-negative integer")
     if args.reapr_retry_max < 0:
         parser.error("--reapr-retry-max must be a non-negative integer")
     if args.pd_code and args.pd_code_option:
@@ -1243,6 +1259,7 @@ def _main_impl(argv: Sequence[str]) -> int:
                     max_thread=args.max_thread,
                     bruteforce_budget=args.bruteforce_budget,
                     timeout=args.timeout,
+                    quit_at_crossing=args.quit_at_crossing,
                     verbose=args.verbose,
                     show_step_pd=args.show_step_pd,
                     reapr=args.reapr,
@@ -1281,6 +1298,7 @@ def _main_impl(argv: Sequence[str]) -> int:
                 max_thread=args.max_thread,
                 bruteforce_budget=args.bruteforce_budget,
                 timeout=args.timeout,
+                quit_at_crossing=args.quit_at_crossing,
                 verbose=args.verbose,
                 show_step_pd=args.show_step_pd,
                 reapr=args.reapr,

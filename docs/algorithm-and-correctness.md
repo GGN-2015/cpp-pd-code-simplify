@@ -307,12 +307,11 @@ original diagram exactly:
 
 - total component count, including crossingless components;
 - Alexander determinant fingerprint;
-- sorted Goeritz signature pair from the two checkerboard color classes;
 - nonzero Alexander roots over `F_11`, `F_19`, and `F_31`.
 
 For efficiency, the implementation first checks component count,
-determinant, and Goeritz signature. The three finite-field root sets are
-computed only after those faster checks match. If more than one candidate
+determinant fingerprint. The three finite-field root sets are computed only
+after those faster checks match. If more than one candidate
 matches, the oracle chooses the candidate whose cleaned crossing count is
 closest to the current crossing count, with deterministic PD-code text as the
 tie-breaker. Accepted results then run through the ordinary R1/R2/nugatory
@@ -324,8 +323,11 @@ still not a proof that two knots or links are equivalent. The output therefore
 carries `reapr_warning`, `reapr_status`, `alexander_determinant_before`,
 `alexander_determinant_after`, `reapr_invariants_before`, and
 `reapr_invariants_after`. Users who enable `--reapr` should still verify
-independent invariants, for example with Khovanov homology. The project tests
-include a `pd_k0.txt` regression fixture where the determinant-preserving
+independent invariants. The project tests compare the same invariant-profile
+guard used by the REAPR acceptance check: component count, Alexander
+determinant fingerprint, and Alexander root sets modulo 11, 19, and 31. The
+tests also include a `pd_k0.txt` regression fixture
+where the determinant-preserving
 projection template is rejected by the conservative crossing window before it
 can collapse a 481-crossing diagram to an extremely small projection. The
 current retry pool is still not strong enough to simplify that fixture under
@@ -392,9 +394,11 @@ half-edge graph cannot be paired into valid PD labels. The final renumbering
 changes only labels, not the underlying diagram.
 
 Heuristic and non-monotone modes do not change this soundness argument because
-they only change candidate ordering, sampling, and whether a bounded detour is
-searched before the terminal proof pass. They can miss a useful route; they
-cannot make an unvalidated witness valid. Use
+they only change candidate ordering, sampling, best-witness lookahead, and
+whether a bounded detour is searched before the terminal proof pass. Heuristic
+best-witness selection scores only witnesses that have already passed
+validation and have been applied to a temporary PD code. These modes can miss a
+useful route; they cannot make an unvalidated witness valid. Use
 `--ban-heuristic --max-paths -1` for complete direct green-path enumeration on
 inputs where that cost is acceptable.
 

@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -66,6 +67,7 @@ struct SimplifierOptions {
     int max_paths = -1;
     int max_threads = -1;
     int timeout_seconds = -1;
+    int quit_at_crossing = -1;
     long long bruteforce_budget = 200000;
     int reapr_retry_max = 3;
     bool has_timeout_deadline = false;
@@ -127,6 +129,8 @@ struct SimplificationResult {
     std::size_t tested_red_paths = 0;
     std::size_t tested_green_paths = 0;
     bool resource_limited = false;
+    int crossing_reduction = 0;
+    std::size_t resulting_crossings = std::numeric_limits<std::size_t>::max();
 };
 
 struct MidSimplificationApplyResult {
@@ -157,6 +161,7 @@ struct ReductionResult {
     std::string reapr_invariants_before;
     std::string reapr_invariants_after;
     bool stopped_by_round_limit = false;
+    bool stopped_by_crossing_limit = false;
     bool timed_out = false;
     bool resource_limited = false;
 };
@@ -219,6 +224,7 @@ constexpr int kHeuristicMinStateBudget = 128;
 constexpr int kHeuristicMaxStateBudget = 4096;
 constexpr int kHeuristicMinPathBudget = 24;
 constexpr int kHeuristicMaxPathBudget = 384;
+constexpr int kHeuristicBestLookaheadBatches = 8;
 constexpr int kR3PrepassMaxDepth = 4;
 constexpr int kR3PrepassMaxStates = 256;
 constexpr int kR3PrepassTimeSliceSeconds = 15;
@@ -240,10 +246,11 @@ constexpr int kNonMonotoneHeuristicStateBudget = 384;
 constexpr int kNonMonotoneHeuristicPathBudget = 8;
 constexpr std::size_t kNonMonotoneMaxGreenTestsPerState = 4096;
 constexpr std::size_t kNonMonotoneMaxTotalGreenTests = 4000000;
+constexpr std::size_t kPureFunctionCacheLimit = 4096;
 constexpr const char* kReaprWarning =
     "WARNING: --reapr uses a deterministic internal reembedding/projection oracle "
-    "guarded by component count, Alexander determinant, Goeritz signature, and "
-    "finite-field Alexander root checks. The resulting PD code may still represent "
+    "guarded by component count, Alexander determinant, and finite-field "
+    "Alexander root checks. The resulting PD code may still represent "
     "a different knot or link; verify additional invariants independently.";
 
 int positive_mod(int value, int modulus) {
@@ -276,6 +283,17 @@ std::uint64_t stable_hash_text(const std::string& text) {
         hash *= 1099511628211ULL;
     }
     return hash;
+}
+
+template <typename Cache>
+void trim_pure_function_cache(Cache& cache) {
+    if (cache.size() >= kPureFunctionCacheLimit) {
+        cache.clear();
+    }
+}
+
+std::string raw_code_cache_key(const PDCode& code) {
+    return format_pd_code(code);
 }
 
 long long face_pair_key(int a, int b) {
@@ -1282,10 +1300,18 @@ struct ReidemeisterIIIMove {
 };
 
 std::vector<ReidemeisterIIIMove> possible_reidemeister_iii_moves(const PDCode& code) {
-    std::vector<ReidemeisterIIIMove> moves;
     if (code.size() < 3) {
-        return moves;
+        return {};
     }
+
+    const std::string cache_key = raw_code_cache_key(code);
+    thread_local std::unordered_map<std::string, std::vector<ReidemeisterIIIMove>> cache;
+    const auto cached = cache.find(cache_key);
+    if (cached != cache.end()) {
+        return cached->second;
+    }
+
+    std::vector<ReidemeisterIIIMove> moves;
     const Diagram diagram(code);
     const DualGraph graph(diagram);
     std::set<std::array<int, 6>> seen;
@@ -1345,6 +1371,8 @@ std::vector<ReidemeisterIIIMove> possible_reidemeister_iii_moves(const PDCode& c
         }
         return false;
     });
+    trim_pure_function_cache(cache);
+    cache.emplace(cache_key, moves);
     return moves;
 }
 
@@ -2182,13 +2210,6 @@ std::map<std::pair<int, int>, std::string> green_crossing_levels(
     return levels;
 }
 
-void clear_witness(SimplificationResult& result) {
-    result.found = false;
-    result.red_path.clear();
-    result.green_path.clear();
-    result.green_crossings.clear();
-}
-
 int crossing_graph_component_count(const PDCode& code) {
     const int crossing_count = static_cast<int>(code.size());
     if (crossing_count == 0) {
@@ -2468,15 +2489,6 @@ inline MidSimplificationApplyResult apply_simplification_witness(
 
 namespace {
 
-bool witness_has_applicable_surgery(const PDCode& code, const SimplificationResult& result) {
-    try {
-        (void)apply_simplification_witness(code, result, 0);
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
-}
-
 void emit_progress(const SimplifierOptions& options, const std::string& message) {
     if (!options.verbose) {
         return;
@@ -2493,7 +2505,16 @@ void emit_step_pd(const SimplifierOptions& options, int round, const PDCode& cod
 }
 
 PDCode canonical_output_code(const PDCode& code) {
-    return parse_pd_code(format_final_pd_code(code));
+    const std::string cache_key = raw_code_cache_key(code);
+    thread_local std::unordered_map<std::string, PDCode> cache;
+    const auto cached = cache.find(cache_key);
+    if (cached != cache.end()) {
+        return cached->second;
+    }
+    PDCode canonical = parse_pd_code(format_final_pd_code(code));
+    trim_pure_function_cache(cache);
+    cache.emplace(cache_key, canonical);
+    return canonical;
 }
 
 std::string search_mode_for_options(const SimplifierOptions& options) {
@@ -2512,6 +2533,9 @@ void validate_timeout_options(const SimplifierOptions& options) {
     }
     if (options.bruteforce_budget < -1 || options.bruteforce_budget == 0) {
         throw std::invalid_argument("bruteforce budget must be -1 or a positive integer");
+    }
+    if (options.quit_at_crossing < -1) {
+        throw std::invalid_argument("quit_at_crossing must be -1 or a non-negative integer");
     }
     if (options.reapr_retry_max < 0) {
         throw std::invalid_argument("reapr retry max must be a non-negative integer");
@@ -2739,7 +2763,6 @@ namespace reapr_invariant_guard {
 struct ReaprInvariantProfile {
     std::size_t components = 0;
     std::vector<int> determinant_fingerprint;
-    std::vector<int> goeritz_signature_pair;
     bool alexander_roots_evaluated = false;
     std::vector<int> alexander_roots_mod_11;
     std::vector<int> alexander_roots_mod_19;
@@ -2748,8 +2771,7 @@ struct ReaprInvariantProfile {
 
 bool same_basic_profile(const ReaprInvariantProfile& left, const ReaprInvariantProfile& right) {
     return left.components == right.components &&
-           left.determinant_fingerprint == right.determinant_fingerprint &&
-           left.goeritz_signature_pair == right.goeritz_signature_pair;
+           left.determinant_fingerprint == right.determinant_fingerprint;
 }
 
 bool same_profile(const ReaprInvariantProfile& left, const ReaprInvariantProfile& right) {
@@ -2772,243 +2794,6 @@ std::string int_vector_string(const std::vector<int>& values) {
     }
     out << ']';
     return out.str();
-}
-
-std::vector<int> checkerboard_face_colors(const DualGraph& graph) {
-    std::vector<int> colors(graph.faces.size(), -1);
-    for (int start = 0; start < static_cast<int>(colors.size()); ++start) {
-        if (colors[static_cast<std::size_t>(start)] != -1) {
-            continue;
-        }
-        colors[static_cast<std::size_t>(start)] = 0;
-        std::queue<int> frontier;
-        frontier.push(start);
-        while (!frontier.empty()) {
-            const int face = frontier.front();
-            frontier.pop();
-            for (int edge_index : graph.adjacency[static_cast<std::size_t>(face)]) {
-                const GraphEdge& edge = graph.edges[static_cast<std::size_t>(edge_index)];
-                const int neighbor = edge.u == face ? edge.v : edge.u;
-                const int expected = 1 - colors[static_cast<std::size_t>(face)];
-                int& neighbor_color = colors[static_cast<std::size_t>(neighbor)];
-                if (neighbor_color == -1) {
-                    neighbor_color = expected;
-                    frontier.push(neighbor);
-                }
-            }
-        }
-    }
-    return colors;
-}
-
-void swap_symmetric_rows_and_columns(
-    std::vector<std::vector<long double>>& matrix,
-    int first,
-    int second) {
-    if (first == second) {
-        return;
-    }
-    std::swap(matrix[static_cast<std::size_t>(first)],
-              matrix[static_cast<std::size_t>(second)]);
-    for (std::vector<long double>& row : matrix) {
-        std::swap(row[static_cast<std::size_t>(first)],
-                  row[static_cast<std::size_t>(second)]);
-    }
-}
-
-int symmetric_matrix_signature(std::vector<std::vector<long double>> matrix) {
-    const long double eps = 1e-10L;
-    const int n = static_cast<int>(matrix.size());
-    int positive = 0;
-    int negative = 0;
-    int k = 0;
-    while (k < n) {
-        int diagonal_pivot = -1;
-        for (int i = k; i < n; ++i) {
-            if (std::fabs(matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(i)]) > eps) {
-                diagonal_pivot = i;
-                break;
-            }
-        }
-        if (diagonal_pivot != -1) {
-            swap_symmetric_rows_and_columns(matrix, k, diagonal_pivot);
-            const long double pivot =
-                matrix[static_cast<std::size_t>(k)][static_cast<std::size_t>(k)];
-            if (pivot > 0) {
-                ++positive;
-            } else {
-                ++negative;
-            }
-            for (int i = k + 1; i < n; ++i) {
-                for (int j = i; j < n; ++j) {
-                    matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] -=
-                        matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(k)] *
-                        matrix[static_cast<std::size_t>(k)][static_cast<std::size_t>(j)] /
-                        pivot;
-                    matrix[static_cast<std::size_t>(j)][static_cast<std::size_t>(i)] =
-                        matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)];
-                }
-            }
-            ++k;
-            continue;
-        }
-
-        int first = -1;
-        int second = -1;
-        for (int i = k; i < n && first == -1; ++i) {
-            for (int j = i + 1; j < n; ++j) {
-                if (std::fabs(matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)]) >
-                    eps) {
-                    first = i;
-                    second = j;
-                    break;
-                }
-            }
-        }
-        if (first == -1) {
-            break;
-        }
-        swap_symmetric_rows_and_columns(matrix, k, first);
-        if (second == k) {
-            second = first;
-        }
-        swap_symmetric_rows_and_columns(matrix, k + 1, second);
-
-        const long double a = matrix[static_cast<std::size_t>(k)][static_cast<std::size_t>(k)];
-        const long double b = matrix[static_cast<std::size_t>(k)][static_cast<std::size_t>(k + 1)];
-        const long double d =
-            matrix[static_cast<std::size_t>(k + 1)][static_cast<std::size_t>(k + 1)];
-        const long double determinant = a * d - b * b;
-        if (std::fabs(determinant) <= eps) {
-            break;
-        }
-        if (determinant < 0) {
-            ++positive;
-            ++negative;
-        } else if (a + d > 0) {
-            positive += 2;
-        } else {
-            negative += 2;
-        }
-
-        const long double inverse00 = d / determinant;
-        const long double inverse01 = -b / determinant;
-        const long double inverse11 = a / determinant;
-        for (int i = k + 2; i < n; ++i) {
-            const long double vi0 =
-                matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(k)];
-            const long double vi1 =
-                matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(k + 1)];
-            for (int j = i; j < n; ++j) {
-                const long double vj0 =
-                    matrix[static_cast<std::size_t>(k)][static_cast<std::size_t>(j)];
-                const long double vj1 =
-                    matrix[static_cast<std::size_t>(k + 1)][static_cast<std::size_t>(j)];
-                const long double correction =
-                    vi0 * (inverse00 * vj0 + inverse01 * vj1) +
-                    vi1 * (inverse01 * vj0 + inverse11 * vj1);
-                matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] -= correction;
-                matrix[static_cast<std::size_t>(j)][static_cast<std::size_t>(i)] =
-                    matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)];
-            }
-        }
-        k += 2;
-    }
-    return positive - negative;
-}
-
-int goeritz_signature_for_color(
-    const Diagram& diagram,
-    const DualGraph& graph,
-    const std::vector<int>& face_colors,
-    int selected_color) {
-    std::vector<int> selected_faces;
-    selected_faces.reserve(graph.faces.size());
-    for (int face = 0; face < static_cast<int>(face_colors.size()); ++face) {
-        if (face_colors[static_cast<std::size_t>(face)] == selected_color) {
-            selected_faces.push_back(face);
-        }
-    }
-    if (selected_faces.empty()) {
-        return 0;
-    }
-
-    std::vector<int> face_to_matrix(graph.faces.size(), -2);
-    for (std::size_t i = 1; i < selected_faces.size(); ++i) {
-        face_to_matrix[static_cast<std::size_t>(selected_faces[i])] =
-            static_cast<int>(i - 1);
-    }
-    const int matrix_size = static_cast<int>(selected_faces.size()) - 1;
-    std::vector<std::vector<long double>> matrix(
-        static_cast<std::size_t>(matrix_size),
-        std::vector<long double>(static_cast<std::size_t>(matrix_size), 0.0L));
-    int correction = 0;
-
-    for (int crossing = 0; crossing < static_cast<int>(diagram.crossings.size()); ++crossing) {
-        std::array<int, 4> face{};
-        for (int strand = 0; strand < 4; ++strand) {
-            face[static_cast<std::size_t>(strand)] =
-                graph.edge_to_face[static_cast<std::size_t>(endpoint_key(Endpoint{crossing, strand}))];
-        }
-
-        int first_face = -1;
-        int second_face = -1;
-        int eta = 0;
-        if (face_colors[static_cast<std::size_t>(face[0])] == selected_color &&
-            face_colors[static_cast<std::size_t>(face[2])] == selected_color) {
-            first_face = face[0];
-            second_face = face[2];
-            eta = diagram.crossings[static_cast<std::size_t>(crossing)].sign;
-        } else if (face_colors[static_cast<std::size_t>(face[1])] == selected_color &&
-                   face_colors[static_cast<std::size_t>(face[3])] == selected_color) {
-            first_face = face[1];
-            second_face = face[3];
-            eta = -diagram.crossings[static_cast<std::size_t>(crossing)].sign;
-        } else {
-            continue;
-        }
-
-        if (eta == diagram.crossings[static_cast<std::size_t>(crossing)].sign) {
-            correction += eta;
-        }
-
-        if (first_face == second_face) {
-            continue;
-        }
-        const int first_index = face_to_matrix[static_cast<std::size_t>(first_face)];
-        const int second_index = face_to_matrix[static_cast<std::size_t>(second_face)];
-        if (first_index >= 0) {
-            matrix[static_cast<std::size_t>(first_index)][static_cast<std::size_t>(first_index)] +=
-                eta;
-        }
-        if (second_index >= 0) {
-            matrix[static_cast<std::size_t>(second_index)][static_cast<std::size_t>(second_index)] +=
-                eta;
-        }
-        if (first_index >= 0 && second_index >= 0) {
-            matrix[static_cast<std::size_t>(first_index)][static_cast<std::size_t>(second_index)] -=
-                eta;
-            matrix[static_cast<std::size_t>(second_index)][static_cast<std::size_t>(first_index)] -=
-                eta;
-        }
-    }
-
-    return symmetric_matrix_signature(std::move(matrix)) - correction;
-}
-
-std::vector<int> goeritz_signature_pair(const PDCode& raw_code) {
-    if (raw_code.empty()) {
-        return std::vector<int>{0, 0};
-    }
-    const PDCode code = canonical_output_code(raw_code);
-    const Diagram diagram(code);
-    const DualGraph graph(diagram);
-    const std::vector<int> face_colors = checkerboard_face_colors(graph);
-    std::vector<int> signatures;
-    signatures.push_back(goeritz_signature_for_color(diagram, graph, face_colors, 0));
-    signatures.push_back(goeritz_signature_for_color(diagram, graph, face_colors, 1));
-    std::sort(signatures.begin(), signatures.end());
-    return signatures;
 }
 
 std::vector<int> alexander_roots_mod_prime(
@@ -3119,7 +2904,6 @@ ReaprInvariantProfile profile_for_code(
     profile.components = analyze_components(code, crossingless_components).total_components();
     profile.determinant_fingerprint =
         alexander_determinant_guard::alexander_determinant_fingerprint(code);
-    profile.goeritz_signature_pair = goeritz_signature_pair(code);
     if (include_alexander_roots) {
         profile.alexander_roots_evaluated = true;
         profile.alexander_roots_mod_11 = alexander_roots_mod_prime(code, 11, options);
@@ -3134,8 +2918,7 @@ std::string profile_string(const ReaprInvariantProfile& profile) {
     out << "components=" << profile.components
         << "; determinant="
         << alexander_determinant_guard::determinant_fingerprint_string(
-               profile.determinant_fingerprint)
-        << "; goeritz_signature_pair=" << int_vector_string(profile.goeritz_signature_pair);
+               profile.determinant_fingerprint);
     if (profile.alexander_roots_evaluated) {
         out << "; alexander_roots_mod_11=" << int_vector_string(profile.alexander_roots_mod_11)
             << "; alexander_roots_mod_19=" << int_vector_string(profile.alexander_roots_mod_19)
@@ -3753,8 +3536,18 @@ inline ComponentAnalysis analyze_components(
         return analysis;
     }
 
+    const std::string cache_key =
+        std::to_string(known_crossingless_components) + "|" + raw_code_cache_key(code);
+    thread_local std::unordered_map<std::string, ComponentAnalysis> cache;
+    const auto cached = cache.find(cache_key);
+    if (cached != cache.end()) {
+        return cached->second;
+    }
+
     Diagram diagram(code);
     analysis.components = component_summaries(diagram);
+    trim_pure_function_cache(cache);
+    cache.emplace(cache_key, analysis);
     return analysis;
 }
 
@@ -4700,6 +4493,46 @@ bool bruteforce_budget_exhausted(const BruteForceBudgetState* budget) {
     return budget != nullptr && budget->exhausted.load(std::memory_order_relaxed);
 }
 
+bool witness_better_than(const SimplificationResult& candidate, const SimplificationResult& current) {
+    if (!current.found) {
+        return true;
+    }
+    if (candidate.crossing_reduction != current.crossing_reduction) {
+        return candidate.crossing_reduction > current.crossing_reduction;
+    }
+    if (candidate.resulting_crossings != current.resulting_crossings) {
+        return candidate.resulting_crossings < current.resulting_crossings;
+    }
+    if (candidate.red_path.size() != current.red_path.size()) {
+        return candidate.red_path.size() > current.red_path.size();
+    }
+    if (candidate.green_path.size() != current.green_path.size()) {
+        return candidate.green_path.size() < current.green_path.size();
+    }
+    return false;
+}
+
+bool score_witness_candidate(
+    const PDCode& code,
+    SimplificationResult& candidate,
+    bool require_applicable) {
+    try {
+        const MidSimplificationApplyResult applied =
+            apply_simplification_witness(code, candidate, 0);
+        candidate.resulting_crossings = applied.code.size();
+        candidate.crossing_reduction =
+            static_cast<int>(code.size()) - static_cast<int>(applied.code.size());
+        return !require_applicable || candidate.crossing_reduction > 0;
+    } catch (const std::exception&) {
+        if (require_applicable) {
+            return false;
+        }
+        candidate.resulting_crossings = code.size();
+        candidate.crossing_reduction = 0;
+        return true;
+    }
+}
+
 RedPathSearchOutcome search_single_red_path(
     const PDCode& code,
     const Diagram& diagram,
@@ -4743,6 +4576,26 @@ RedPathSearchOutcome search_single_red_path(
     }
 
     const int cutoff = static_cast<int>(red_path.size()) - 1;
+    const bool choose_best_within_red =
+        !(options.max_paths == -1 && options.ban_heuristic);
+
+    auto consider_candidate = [&](SimplificationResult& candidate) {
+        candidate.path_search_mode = path_search_mode;
+        if (!score_witness_candidate(code, candidate, options.require_applicable)) {
+            return true;
+        }
+        candidate.found = true;
+        if (witness_better_than(candidate, outcome.witness)) {
+            outcome.witness = std::move(candidate);
+            outcome.found = true;
+        }
+        if (!choose_best_within_red) {
+            outcome.completed = true;
+            outcome.witness.tested_green_paths = outcome.tested_green_paths;
+            return false;
+        }
+        return true;
+    };
 
     auto test_green_path = [&](const std::vector<int>& green_path) {
         check_timeout(options);
@@ -4758,37 +4611,33 @@ RedPathSearchOutcome search_single_red_path(
         if (green_path.size() >= red_path.size()) {
             return true;
         }
+        SimplificationResult candidate;
+        candidate.path_search_mode = path_search_mode;
         if (do_check(
                 diagram,
                 graph,
                 red_path,
                 green_path,
                 Direction::Left,
-                outcome.witness,
+                candidate,
                 options)) {
-            if (!options.require_applicable || witness_has_applicable_surgery(code, outcome.witness)) {
-                outcome.found = true;
-                outcome.completed = true;
-                outcome.witness.tested_green_paths = outcome.tested_green_paths;
+            if (!consider_candidate(candidate)) {
                 return false;
             }
-            clear_witness(outcome.witness);
         }
+        candidate = SimplificationResult();
+        candidate.path_search_mode = path_search_mode;
         if (do_check(
                 diagram,
                 graph,
                 red_path,
                 green_path,
                 Direction::Right,
-                outcome.witness,
+                candidate,
                 options)) {
-            if (!options.require_applicable || witness_has_applicable_surgery(code, outcome.witness)) {
-                outcome.found = true;
-                outcome.completed = true;
-                outcome.witness.tested_green_paths = outcome.tested_green_paths;
+            if (!consider_candidate(candidate)) {
                 return false;
             }
-            clear_witness(outcome.witness);
         }
         return true;
     };
@@ -4832,6 +4681,9 @@ RedPathSearchOutcome search_single_red_path(
 
     outcome.completed = true;
     outcome.witness.tested_green_paths = outcome.tested_green_paths;
+    if (outcome.found) {
+        outcome.witness.tested_green_paths = outcome.tested_green_paths;
+    }
     return outcome;
 }
 
@@ -4881,6 +4733,56 @@ SimplificationResult merge_red_path_outcomes(
     return result;
 }
 
+SimplificationResult merge_best_red_path_batch(
+    const std::vector<RedPathSearchOutcome>& outcomes,
+    const std::string& path_search_mode) {
+    SimplificationResult result;
+    result.path_search_mode = path_search_mode;
+
+    int best_found = -1;
+    for (int i = 0; i < static_cast<int>(outcomes.size()); ++i) {
+        const RedPathSearchOutcome& outcome = outcomes[i];
+        if (outcome.resource_limited) {
+            result.resource_limited = true;
+        }
+        if (!outcome.completed && !outcome.found && !outcome.resource_limited && !outcome.skipped) {
+            std::ostringstream message;
+            message << "Parallel heuristic search did not complete red path batch entry " << i;
+            throw std::runtime_error(message.str());
+        }
+        if (outcome.completed || outcome.found || outcome.resource_limited ||
+            outcome.tested_green_paths > 0) {
+            ++result.tested_red_paths;
+        }
+        result.tested_green_paths += outcome.tested_green_paths;
+        if (outcome.found &&
+            (best_found < 0 ||
+             witness_better_than(outcome.witness, outcomes[best_found].witness))) {
+            best_found = i;
+        }
+    }
+
+    if (best_found >= 0) {
+        result = outcomes[best_found].witness;
+        result.path_search_mode = path_search_mode;
+        std::size_t tested_red_paths = 0;
+        std::size_t tested_green_paths = 0;
+        bool resource_limited = false;
+        for (const RedPathSearchOutcome& outcome : outcomes) {
+            if (outcome.completed || outcome.found || outcome.resource_limited ||
+                outcome.tested_green_paths > 0) {
+                ++tested_red_paths;
+            }
+            tested_green_paths += outcome.tested_green_paths;
+            resource_limited = resource_limited || outcome.resource_limited;
+        }
+        result.tested_red_paths = tested_red_paths;
+        result.tested_green_paths = tested_green_paths;
+        result.resource_limited = resource_limited;
+    }
+    return result;
+}
+
 SimplificationResult find_simplification_parallel_bruteforce(
     const PDCode& code,
     const Diagram& diagram,
@@ -4899,6 +4801,10 @@ SimplificationResult find_simplification_parallel_bruteforce(
 
     auto worker = [&]() {
         while (!failed.load(std::memory_order_relaxed)) {
+            if (next_index.load(std::memory_order_relaxed) >=
+                best_found_index.load(std::memory_order_relaxed)) {
+                break;
+            }
             const int index = next_index.fetch_add(1, std::memory_order_relaxed);
             if (index >= static_cast<int>(red_lines.size())) {
                 break;
@@ -4948,6 +4854,101 @@ SimplificationResult find_simplification_parallel_bruteforce(
     return merge_red_path_outcomes(outcomes, path_search_mode);
 }
 
+SimplificationResult find_simplification_parallel_heuristic_batches(
+    const PDCode& code,
+    const Diagram& diagram,
+    const DualGraph& base_graph,
+    const std::vector<std::vector<Endpoint>>& red_lines,
+    const SimplifierOptions& options,
+    const std::string& path_search_mode,
+    int worker_count) {
+    SimplificationResult aggregate;
+    aggregate.path_search_mode = path_search_mode;
+    if (red_lines.empty()) {
+        return aggregate;
+    }
+    SimplificationResult best_witness;
+    best_witness.path_search_mode = path_search_mode;
+    int batches_since_best = 0;
+
+    for (std::size_t batch_begin = 0; batch_begin < red_lines.size();
+         batch_begin += static_cast<std::size_t>(worker_count)) {
+        check_timeout(options);
+        const std::size_t batch_end = std::min(
+            red_lines.size(),
+            batch_begin + static_cast<std::size_t>(worker_count));
+        std::vector<RedPathSearchOutcome> outcomes(batch_end - batch_begin);
+        std::atomic<bool> failed(false);
+        std::exception_ptr first_exception;
+        std::mutex exception_mutex;
+
+        auto worker = [&](std::size_t local_index) {
+            const std::size_t red_index = batch_begin + local_index;
+            try {
+                outcomes[local_index] = search_single_red_path(
+                    code,
+                    diagram,
+                    base_graph,
+                    red_lines[red_index],
+                    options,
+                    path_search_mode,
+                    -1,
+                    nullptr,
+                    nullptr);
+            } catch (...) {
+                failed.store(true, std::memory_order_relaxed);
+                std::lock_guard<std::mutex> lock(exception_mutex);
+                if (!first_exception) {
+                    first_exception = std::current_exception();
+                }
+            }
+        };
+
+        std::vector<std::thread> workers;
+        workers.reserve(batch_end - batch_begin);
+        for (std::size_t local_index = 0; local_index < batch_end - batch_begin; ++local_index) {
+            workers.emplace_back(worker, local_index);
+        }
+        for (std::thread& thread : workers) {
+            thread.join();
+        }
+        if (first_exception) {
+            std::rethrow_exception(first_exception);
+        }
+        if (failed.load(std::memory_order_relaxed)) {
+            throw std::runtime_error("Parallel heuristic search failed");
+        }
+
+        SimplificationResult batch = merge_best_red_path_batch(outcomes, path_search_mode);
+        aggregate.tested_red_paths += batch.tested_red_paths;
+        aggregate.tested_green_paths += batch.tested_green_paths;
+        aggregate.resource_limited = aggregate.resource_limited || batch.resource_limited;
+        if (batch.found) {
+            if (witness_better_than(batch, best_witness)) {
+                best_witness = batch;
+                batches_since_best = 0;
+            } else if (best_witness.found) {
+                ++batches_since_best;
+            }
+        } else if (best_witness.found) {
+            ++batches_since_best;
+        }
+        if (best_witness.found &&
+            (batches_since_best >= kHeuristicBestLookaheadBatches ||
+             batch_end == red_lines.size() ||
+             aggregate.resource_limited)) {
+            best_witness.tested_red_paths = aggregate.tested_red_paths;
+            best_witness.tested_green_paths = aggregate.tested_green_paths;
+            best_witness.resource_limited = aggregate.resource_limited;
+            return best_witness;
+        }
+        if (aggregate.resource_limited) {
+            return aggregate;
+        }
+    }
+    return aggregate;
+}
+
 }  // namespace
 
 inline SimplificationResult find_simplification(
@@ -4961,7 +4962,25 @@ inline SimplificationResult find_simplification(
     check_timeout(run_options);
     DualGraph base_graph(diagram);
     check_timeout(run_options);
-    const auto red_lines = possible_red_lines(diagram);
+    auto red_lines = possible_red_lines(diagram);
+    const bool heuristic_mode = run_options.max_paths == -1 && !run_options.ban_heuristic;
+    if (heuristic_mode) {
+        std::stable_sort(red_lines.begin(), red_lines.end(), [](const auto& lhs, const auto& rhs) {
+            if (lhs.size() != rhs.size()) {
+                return lhs.size() > rhs.size();
+            }
+            if (lhs.front().crossing != rhs.front().crossing) {
+                return lhs.front().crossing < rhs.front().crossing;
+            }
+            if (lhs.front().strand != rhs.front().strand) {
+                return lhs.front().strand < rhs.front().strand;
+            }
+            if (lhs.back().crossing != rhs.back().crossing) {
+                return lhs.back().crossing < rhs.back().crossing;
+            }
+            return lhs.back().strand < rhs.back().strand;
+        });
+    }
     check_timeout(run_options);
     const bool parallel_red_path_mode = run_options.max_paths == -1;
     const bool brute_force_mode = parallel_red_path_mode && run_options.ban_heuristic;
@@ -4989,6 +5008,16 @@ inline SimplificationResult find_simplification(
         emit_progress(run_options, message.str());
     }
     if (worker_count > 1) {
+        if (heuristic_mode) {
+            return find_simplification_parallel_heuristic_batches(
+                code,
+                diagram,
+                base_graph,
+                red_lines,
+                run_options,
+                result.path_search_mode,
+                worker_count);
+        }
         return find_simplification_parallel_bruteforce(
             code,
             diagram,
@@ -5000,6 +5029,9 @@ inline SimplificationResult find_simplification(
             brute_budget_ptr);
     }
 
+    SimplificationResult best_witness;
+    best_witness.path_search_mode = result.path_search_mode;
+    int red_paths_since_best = 0;
     for (std::size_t red_index = 0; red_index < red_lines.size(); ++red_index) {
         const auto& red_path = red_lines[red_index];
         check_timeout(run_options);
@@ -5034,10 +5066,41 @@ inline SimplificationResult find_simplification(
             found.tested_red_paths = result.tested_red_paths;
             found.tested_green_paths = result.tested_green_paths;
             found.resource_limited = outcome.resource_limited;
+            if (heuristic_mode) {
+                if (witness_better_than(found, best_witness)) {
+                    best_witness = found;
+                    red_paths_since_best = 0;
+                } else if (best_witness.found) {
+                    ++red_paths_since_best;
+                }
+                if (best_witness.found &&
+                    red_paths_since_best >= kHeuristicBestLookaheadBatches) {
+                    best_witness.tested_red_paths = result.tested_red_paths;
+                    best_witness.tested_green_paths = result.tested_green_paths;
+                    best_witness.resource_limited = result.resource_limited;
+                    return best_witness;
+                }
+                continue;
+            }
             return found;
+        }
+        if (heuristic_mode && best_witness.found) {
+            ++red_paths_since_best;
+            if (red_paths_since_best >= kHeuristicBestLookaheadBatches) {
+                best_witness.tested_red_paths = result.tested_red_paths;
+                best_witness.tested_green_paths = result.tested_green_paths;
+                best_witness.resource_limited = result.resource_limited;
+                return best_witness;
+            }
         }
     }
 
+    if (heuristic_mode && best_witness.found) {
+        best_witness.tested_red_paths = result.tested_red_paths;
+        best_witness.tested_green_paths = result.tested_green_paths;
+        best_witness.resource_limited = result.resource_limited;
+        return best_witness;
+    }
     return result;
 }
 
@@ -5052,6 +5115,20 @@ inline ReductionResult reduce_pd_code(
     output.crossingless_components = known_crossingless_components;
     PDCode best_code = output.code;
     std::size_t best_crossingless_components = output.crossingless_components;
+    auto stop_if_quit_at_crossing = [&](const std::string& stage) {
+        if (run_options.quit_at_crossing < 0 ||
+            output.code.size() > static_cast<std::size_t>(run_options.quit_at_crossing)) {
+            return false;
+        }
+        output.stopped_by_crossing_limit = true;
+        std::ostringstream message;
+        message << stage << " stop_quit_at_crossing threshold="
+                << run_options.quit_at_crossing
+                << " crossings=" << output.code.size()
+                << " crossingless_components=" << output.crossingless_components;
+        emit_progress(run_options, message.str());
+        return true;
+    };
 
     try {
         check_timeout(run_options);
@@ -5064,6 +5141,7 @@ inline ReductionResult reduce_pd_code(
                     << " max_thread=" << run_options.max_threads
                     << " bruteforce_budget=" << run_options.bruteforce_budget
                     << " timeout=" << run_options.timeout_seconds
+                    << " quit_at_crossing=" << run_options.quit_at_crossing
                     << " heuristic=" << (run_options.ban_heuristic ? "off" : "on")
                     << " reapr=" << (run_options.enable_reapr ? "on" : "off")
                     << " reapr_retry_max=" << run_options.reapr_retry_max;
@@ -5093,7 +5171,9 @@ inline ReductionResult reduce_pd_code(
             emit_progress(run_options, message.str());
         }
 
-        if (run_options.enable_reapr) {
+        (void)stop_if_quit_at_crossing("pre_simplify");
+
+        if (!output.stopped_by_crossing_limit && run_options.enable_reapr) {
             {
                 std::ostringstream message;
                 message << "reapr_oracle_start crossings=" << output.code.size()
@@ -5133,6 +5213,7 @@ inline ReductionResult reduce_pd_code(
                 output.nugatory_crossing_moves += reapr_cleanup.nugatory_crossing_moves;
                 best_code = output.code;
                 best_crossingless_components = output.crossingless_components;
+                (void)stop_if_quit_at_crossing("reapr_oracle");
             }
             {
                 std::ostringstream message;
@@ -5149,7 +5230,8 @@ inline ReductionResult reduce_pd_code(
             }
         }
 
-        while (reduction_round < 0 || output.mid_simplification_rounds < reduction_round) {
+        while (!output.stopped_by_crossing_limit &&
+               (reduction_round < 0 || output.mid_simplification_rounds < reduction_round)) {
             check_timeout(run_options);
             const int round = output.mid_simplification_rounds + 1;
             if (run_options.max_paths == -1 && !run_options.ban_heuristic) {
@@ -5207,6 +5289,9 @@ inline ReductionResult reduce_pd_code(
                     output.reidemeister_ii_moves += r3_prepass.reidemeister_ii_moves;
                     output.reidemeister_iii_moves += r3_prepass.reidemeister_iii_moves;
                     output.nugatory_crossing_moves += r3_prepass.nugatory_crossing_moves;
+                    if (stop_if_quit_at_crossing("r3_prepass")) {
+                        break;
+                    }
                     continue;
                 }
             }
@@ -5327,6 +5412,12 @@ inline ReductionResult reduce_pd_code(
                                     << " nugatory_moves=" << step.nugatory_crossing_moves;
                             emit_progress(run_options, message.str());
                         }
+                        if (stop_if_quit_at_crossing("non_monotone")) {
+                            break;
+                        }
+                    }
+                    if (output.stopped_by_crossing_limit) {
+                        break;
                     }
                     continue;
                 }
@@ -5425,6 +5516,9 @@ inline ReductionResult reduce_pd_code(
                     output.reidemeister_ii_moves += r3.reidemeister_ii_moves;
                     output.reidemeister_iii_moves += r3.reidemeister_iii_moves;
                     output.nugatory_crossing_moves += r3.nugatory_crossing_moves;
+                    if (stop_if_quit_at_crossing("r3_failover")) {
+                        break;
+                    }
                     continue;
                 }
                 {
@@ -5471,6 +5565,7 @@ inline ReductionResult reduce_pd_code(
                         << " nugatory_moves=" << simplified.nugatory_crossing_moves;
                 emit_progress(run_options, message.str());
             }
+            (void)stop_if_quit_at_crossing("mid_simplification");
         }
     } catch (const TimeoutError& error) {
         output.timed_out = true;
@@ -5491,6 +5586,7 @@ inline ReductionResult reduce_pd_code(
     output.stopped_by_round_limit =
         !output.timed_out &&
         !output.resource_limited &&
+        !output.stopped_by_crossing_limit &&
         reduction_round >= 0 &&
         output.mid_simplification_rounds >= reduction_round;
     {
@@ -5505,6 +5601,8 @@ inline ReductionResult reduce_pd_code(
                 << " r3_moves=" << output.reidemeister_iii_moves
                 << " stopped_by_round_limit="
                 << (output.stopped_by_round_limit ? "yes" : "no")
+                << " stopped_by_crossing_limit="
+                << (output.stopped_by_crossing_limit ? "yes" : "no")
                 << " timed_out=" << (output.timed_out ? "yes" : "no")
                 << " resource_limited=" << (output.resource_limited ? "yes" : "no");
         emit_progress(run_options, message.str());

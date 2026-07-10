@@ -19,6 +19,7 @@ def main() -> int:
             max_thread=int(request.get("max_thread", -1)),
             bruteforce_budget=int(request.get("bruteforce_budget", 200000)),
             timeout=int(request.get("timeout", -1)),
+            quit_at_crossing=int(request.get("quit_at_crossing", -1)),
             verbose=bool(request.get("verbose", False)),
             show_step_pd=bool(request.get("show_step_pd", False)),
             reapr=bool(request.get("reapr", False)),
