@@ -34,13 +34,14 @@ HEURISTIC_MAX_STATE_BUDGET = 4096
 HEURISTIC_MIN_PATH_BUDGET = 24
 HEURISTIC_MAX_PATH_BUDGET = 384
 HEURISTIC_BEST_LOOKAHEAD_BATCHES = 8
+HEURISTIC_PARALLEL_MIN_CROSSINGS = 500
 R3_FAILOVER_MAX_DEPTH = 8
 R3_FAILOVER_MAX_STATES = 4096
 R3_FAILOVER_TIME_SLICE_SECONDS = 30
 R3_PREPASS_MAX_DEPTH = 4
 R3_PREPASS_MAX_STATES = 256
 R3_PREPASS_TIME_SLICE_SECONDS = 15
-MID_SEARCH_TIME_SLICE_SECONDS = 30
+MID_SEARCH_TIME_SLICE_SECONDS = 20
 NON_MONOTONE_TIME_SLICE_SECONDS = 60
 NON_MONOTONE_MAX_RED_LENGTH = 80
 NON_MONOTONE_MAX_DEPTH = 72
@@ -2868,6 +2869,7 @@ def find_simplification(
     progress: Optional[Callable[[str], None]] = None,
     timeout: int = -1,
     _timeout_deadline: Optional[float] = None,
+    force_heuristic_parallel: bool = False,
 ) -> SimplificationResult:
     if max_thread < -1 or max_thread == 0:
         raise ValueError("max_thread must be -1 or a positive integer")
@@ -2882,7 +2884,7 @@ def find_simplification(
     else:
         result.path_search_mode = "bounded"
 
-    cache_key: Optional[Tuple[str, int, bool, bool, int, int]] = None
+    cache_key: Optional[Tuple[str, int, bool, bool, int, int, bool]] = None
     if not verbose and deadline is None:
         cache_key = (
             format_final_pd_code(code),
@@ -2891,6 +2893,7 @@ def find_simplification(
             require_applicable,
             max_thread,
             bruteforce_budget,
+            force_heuristic_parallel,
         )
         cached = _SIMPLIFICATION_SEARCH_CACHE.get(cache_key)
         if cached is not None:
@@ -2907,15 +2910,37 @@ def find_simplification(
     check_timeout(timeout, deadline)
     red_lines = possible_red_lines(diagram)
     heuristic_mode = max_paths == -1 and not ban_heuristic
+    heuristic_parallel_enabled = (
+        heuristic_mode
+        and (force_heuristic_parallel or len(code) >= HEURISTIC_PARALLEL_MIN_CROSSINGS)
+    )
+    red_path_parallel_candidate = max_paths == -1 and (
+        not heuristic_mode or heuristic_parallel_enabled
+    )
+    worker_count = (
+        selected_bruteforce_worker_count(max_thread, len(red_lines))
+        if red_path_parallel_candidate
+        else 1
+    )
     if heuristic_mode:
+        if worker_count > 1:
+            heuristic_message = (
+                "heuristic_parallel_batches first_hit=no "
+                f"lookahead_batches={HEURISTIC_BEST_LOOKAHEAD_BATCHES} "
+                f"min_crossings={HEURISTIC_PARALLEL_MIN_CROSSINGS} "
+                f"red_paths={len(red_lines)}"
+            )
+        else:
+            heuristic_message = (
+                f"heuristic_legacy first_hit=yes red_paths={len(red_lines)}"
+            )
         _emit_progress(
             verbose,
             progress,
-            f"heuristic_legacy first_hit=yes red_paths={len(red_lines)}",
+            heuristic_message,
         )
     check_timeout(timeout, deadline)
-    if max_paths == -1 and not heuristic_mode:
-        worker_count = selected_bruteforce_worker_count(max_thread, len(red_lines))
+    if red_path_parallel_candidate:
         if max_thread == -1:
             _emit_progress(
                 verbose,
@@ -4443,6 +4468,9 @@ def reduce_pd_code(
     try:
         check_timeout(timeout, deadline)
         top_level_heuristic_mode = max_paths == -1 and not ban_heuristic
+        large_initial_heuristic_mode = (
+            top_level_heuristic_mode and len(code) >= HEURISTIC_PARALLEL_MIN_CROSSINGS
+        )
         _emit_progress(
             verbose,
             progress,
@@ -4453,6 +4481,7 @@ def reduce_pd_code(
                 f"max_thread={max_thread} bruteforce_budget={bruteforce_budget} "
                 f"timeout={timeout} quit_at_crossing={quit_at_crossing} "
                 f"heuristic={'off' if ban_heuristic else 'on'} "
+                f"heuristic_parallel_initial={'on' if large_initial_heuristic_mode else 'off'} "
                 f"reapr={'on' if reapr else 'off'} "
                 f"reapr_retry_max={reapr_retry_max}"
             ),
@@ -4680,6 +4709,7 @@ def reduce_pd_code(
                         progress=progress,
                         timeout=stage_timeout_value,
                         _timeout_deadline=stage_deadline,
+                        force_heuristic_parallel=large_initial_heuristic_mode,
                     )
                 except PdCodeSimplifyTimeoutError:
                     if not use_soft_slice or timeout_expired(deadline):
@@ -4844,7 +4874,10 @@ def reduce_pd_code(
                 return False
 
             if adaptive_mode:
-                if not run_heuristic_search(False):
+                use_heuristic_soft_slice = (
+                    timeout > 0 and not large_initial_heuristic_mode
+                )
+                if not run_heuristic_search(use_heuristic_soft_slice):
                     output.code = _canonical_output_code(output.code)
                     _emit_progress(
                         verbose,

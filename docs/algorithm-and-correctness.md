@@ -161,14 +161,23 @@ This canonicalization relabels each component from 1, sorts crossings, and
 rotates each crossing so the displayed row starts at the under-incoming strand.
 It is not a topological move. In default heuristic mode, however, the internal
 state intentionally keeps the original prototype-compatible row and label order
-while heuristic witnesses keep succeeding. This preserves legacy hard-case
-routes where a large crossing drop appears only after many earlier first-hit
-heuristic rounds.
+while heuristic witnesses keep succeeding. This preserves hard-case routes
+where a large crossing drop appears only after many earlier heuristic rounds.
 
 The default `--reduction-round -1` repeats until no applicable witness remains.
-In default heuristic mode, each round first tries the legacy heuristic
-red-green search. If it lowers the crossing count, the next round immediately
-returns to heuristic search with the same prototype-compatible internal order.
+In default heuristic mode, each round first tries the deterministic heuristic
+red-green search. With one worker this is the original legacy first-hit route.
+With multiple workers and an initial input of at least 500 crossings, red paths
+are searched in deterministic batches and the best validated witness in the
+batch window is selected by actual crossing reduction. Jobs that start below
+that threshold keep the legacy first-hit route to preserve the timing profile
+of ordinary inputs. If heuristic search lowers the crossing count, the next
+round immediately returns to heuristic search with the same prototype-compatible
+internal order.
+For ordinary jobs with a positive global timeout, heuristic search uses a
+20 second soft slice before the non-heuristic handoff. The soft slice is not
+used for jobs that start at or above the 500-crossing multi-worker threshold,
+so large hard-case routes can keep their deterministic best-batch search.
 If heuristic search misses, the implementation canonicalizes the current PD code
 at the non-heuristic handoff boundary, then uses a deterministic scheduler over
 the small RIII prepass and deterministic non-monotone failover described below.
@@ -404,11 +413,12 @@ half-edge graph cannot be paired into valid PD labels. The final renumbering
 changes only labels, not the underlying diagram.
 
 Heuristic and non-monotone modes do not change this soundness argument because
-they only change candidate ordering, sampling, first-hit selection, and whether
-a bounded detour is searched before the terminal proof pass. Heuristic first-hit
-selection returns only witnesses that have already passed validation and have
-been applied to a temporary PD code. These modes can miss a useful route; they
-cannot make an unvalidated witness valid. Use
+they only change candidate ordering, sampling, witness selection, and whether a
+bounded detour is searched before the terminal proof pass. Heuristic selection,
+whether single-worker first-hit or multi-worker best-batch, returns only
+witnesses that have already passed validation and have been applied to a
+temporary PD code. These modes can miss a useful route; they cannot make an
+unvalidated witness valid. Use
 `--ban-heuristic --max-paths -1` for complete direct green-path enumeration on
 inputs where that cost is acceptable.
 

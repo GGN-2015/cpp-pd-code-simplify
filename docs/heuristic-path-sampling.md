@@ -42,6 +42,10 @@ search. If it misses, the current PD code is canonicalized and handed to the
 small RIII prepass, the deterministic non-monotone failover, and finally the
 brute-force proof pass described in
 [Algorithm and Correctness](algorithm-and-correctness.md).
+When a positive global timeout is set and the job did not start from the large
+multi-worker threshold below, each ordinary heuristic stage receives a 20 second
+soft slice. If that slice expires, the current round lets the later adaptive
+stages run instead of spending the whole job timeout inside heuristic search.
 
 ## Scoring
 
@@ -89,10 +93,23 @@ the search from spending all budget inside a single locally dense area. The
 serial number makes the result reproducible across platforms.
 
 For a red path in default heuristic mode, sampled green paths are streamed
-through the usual witness validator and temporary PD application. The first
-validated witness is returned immediately. This is the legacy first-hit rule
-shared by the C++ implementation, the Python prototype, and the Python C++
-interface.
+through the usual witness validator and temporary PD application. With one
+worker, the first validated witness is returned immediately. This is the
+legacy first-hit rule shared by the C++ implementation, the Python prototype,
+and the Python C++ interface.
+
+When `max_paths=-1`, the high-level reduction job started from at least 500
+crossings, and more than one worker is selected by `--max-thread`, the same
+red-path order is split into deterministic batches. Each worker still uses the
+same per-red-path green sampler and validator. At the end of a batch, validated
+witnesses are ranked by actual crossing reduction, then final crossing count,
+red-path length, and green-path length. The search stops after the best witness
+has survived a fixed lookahead window of additional batches. This preserves
+reproducibility while letting very large diagrams use multiple CPU cores and
+while preferring a witness that removes more crossings when several early red
+paths succeed at the same time. Jobs that start below 500 crossings keep the
+legacy first-hit route to avoid changing the behavior and timing profile of
+ordinary benchmark cases.
 
 When `max_paths` is set to a finite positive value, the bounded non-default
 search still scores validated candidates inside one red path by actual crossing
@@ -109,6 +126,8 @@ beam width per (depth, face): 8
 state budget: min 128, max 4096
 path budget: min 24, max 384
 best-witness lookahead after a hit: 8 batches
+multi-worker heuristic threshold: 500 crossings
+ordinary timeout-stage heuristic slice: 20 seconds
 ```
 
 For each red path, the concrete state budget is derived from the face count and
@@ -120,9 +139,9 @@ path_budget  = clamp(face_count * 2 + cutoff * 8, 24, 384)
 ```
 
 These budgets are not inferred from `max_paths`. They are part of the heuristic
-search mode itself. The historical best-witness lookahead constant is retained
-for source compatibility, but default heuristic mode now follows the original
-prototype first-hit rule instead of the lookahead scorer.
+search mode itself. The best-witness lookahead is used only by multi-worker
+heuristic batches. Single-worker heuristic mode follows the original prototype
+first-hit rule.
 
 ## Validation And Correctness
 

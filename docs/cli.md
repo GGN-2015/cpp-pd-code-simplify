@@ -112,10 +112,13 @@ component.
 
 `--max-paths -1` is the default. In that mode the executable uses deterministic
 heuristic green-path sampling. Heuristic mode preserves the original prototype
-red-path generation order and applies the first validated witness found for that
-round. This legacy first-hit order is intentional: some hard diagrams need many
-small legacy steps before a later large crossing drop becomes visible. Add
-`--ban-heuristic` to run exhaustive green-path enumeration instead. If
+red-path generation order. With one worker it applies the first validated
+witness found for that round. With multiple workers and an initial input of at
+least 500 crossings it searches deterministic red-path batches in parallel and
+chooses the validated witness with the best actual crossing reduction inside
+the batch lookahead window. Jobs that start below 500 crossings keep the legacy
+first-hit route. Add `--ban-heuristic` to run exhaustive green-path
+enumeration instead. If
 `--max-paths` is any other integer, the bounded DFS ordering is used.
 
 Brute-force green-path enumeration is streamed: each candidate path is checked
@@ -138,6 +141,10 @@ final RIII failover, the current PD code is canonicalized first.
 Each default round tries the legacy heuristic search first. If it succeeds, the
 next round returns to heuristic search. If it misses, the executable uses a
 deterministic adaptive scheduler for `r3_prepass` and `non_monotone`.
+When `--timeout K` is positive and the input did not start with at least 500
+crossings, the heuristic stage uses a 20 second soft slice before this adaptive
+handoff. Large initial inputs keep the multi-worker best-batch heuristic search
+without that stage slice.
 Productive helper stages gain priority; misses and soft stage timeouts lower
 priority. If a helper stage reduces the diagram, the result is applied and the
 next round starts again from heuristic mode. If all helper stages miss, the

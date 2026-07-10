@@ -88,6 +88,9 @@ and the final RIII failover are tried as needed. Pass
 `verbose=True` to forward timestamped C++ progress logs to stderr. If a call
 exceeds its timeout, the returned dictionary still contains the best PD code
 found so far and sets `timed_out` to `True`.
+With a positive timeout, ordinary inputs below the 500-crossing multi-worker
+threshold give each heuristic stage a 20 second soft slice before the backend
+hands the round to adaptive helper stages.
 Pass `quit_at_crossing=N`, or CLI flag `--quit-at-crossing N`, to stop once
 the current PD code has at most `N` crossings. The default `-1` disables this;
 the returned dictionary sets `stopped_by_crossing_limit` when the threshold is

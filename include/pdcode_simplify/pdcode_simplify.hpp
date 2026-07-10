@@ -75,6 +75,7 @@ struct SimplifierOptions {
     bool ban_heuristic = false;
     bool enable_reapr = false;
     bool require_applicable = false;
+    bool force_heuristic_parallel = false;
     bool verbose = false;
     std::function<void(const std::string&)> progress;
     std::function<void(int, const PDCode&)> step_pd_output;
@@ -225,13 +226,14 @@ constexpr int kHeuristicMaxStateBudget = 4096;
 constexpr int kHeuristicMinPathBudget = 24;
 constexpr int kHeuristicMaxPathBudget = 384;
 constexpr int kHeuristicBestLookaheadBatches = 8;
+constexpr std::size_t kHeuristicParallelMinCrossings = 500;
 constexpr int kR3PrepassMaxDepth = 4;
 constexpr int kR3PrepassMaxStates = 256;
 constexpr int kR3PrepassTimeSliceSeconds = 15;
 constexpr int kR3FailoverMaxDepth = 8;
 constexpr int kR3FailoverMaxStates = 4096;
 constexpr int kR3FailoverTimeSliceSeconds = 30;
-constexpr int kMidSearchTimeSliceSeconds = 30;
+constexpr int kMidSearchTimeSliceSeconds = 20;
 constexpr int kNonMonotoneTimeSliceSeconds = 60;
 constexpr int kNonMonotoneMaxRedLength = 80;
 constexpr int kNonMonotoneMaxDepth = 72;
@@ -4994,29 +4996,40 @@ inline SimplificationResult find_simplification(
     check_timeout(run_options);
     auto red_lines = possible_red_lines(diagram);
     const bool heuristic_mode = run_options.max_paths == -1 && !run_options.ban_heuristic;
-    if (heuristic_mode) {
-        std::ostringstream message;
-        message << "heuristic_legacy first_hit=yes red_paths=" << red_lines.size();
-        emit_progress(run_options, message.str());
-    }
-    check_timeout(run_options);
-    const bool parallel_red_path_mode = run_options.max_paths == -1 && !heuristic_mode;
-    const bool brute_force_mode = parallel_red_path_mode && run_options.ban_heuristic;
-    const int worker_count = parallel_red_path_mode
+    const bool heuristic_parallel_enabled =
+        heuristic_mode &&
+        (run_options.force_heuristic_parallel || code.size() >= kHeuristicParallelMinCrossings);
+    const bool red_path_parallel_candidate =
+        run_options.max_paths == -1 && (!heuristic_mode || heuristic_parallel_enabled);
+    const int worker_count = red_path_parallel_candidate
         ? selected_bruteforce_worker_count(
               run_options.max_threads,
               static_cast<int>(red_lines.size()))
         : 1;
+    if (heuristic_mode) {
+        std::ostringstream message;
+        if (worker_count > 1) {
+            message << "heuristic_parallel_batches first_hit=no"
+                    << " lookahead_batches=" << kHeuristicBestLookaheadBatches
+                    << " min_crossings=" << kHeuristicParallelMinCrossings
+                    << " red_paths=" << red_lines.size();
+        } else {
+            message << "heuristic_legacy first_hit=yes red_paths=" << red_lines.size();
+        }
+        emit_progress(run_options, message.str());
+    }
+    check_timeout(run_options);
+    const bool brute_force_mode = red_path_parallel_candidate && run_options.ban_heuristic;
     BruteForceBudgetState brute_budget(run_options.bruteforce_budget);
     BruteForceBudgetState* brute_budget_ptr = brute_force_mode ? &brute_budget : nullptr;
-    if (parallel_red_path_mode && run_options.max_threads == -1) {
+    if (red_path_parallel_candidate && run_options.max_threads == -1) {
         std::ostringstream message;
         message << result.path_search_mode << "_threads max_thread=-1"
                 << " actual_threads=" << worker_count
                 << " red_paths=" << red_lines.size()
                 << " bruteforce_budget=" << run_options.bruteforce_budget;
         emit_progress(run_options, message.str());
-    } else if (parallel_red_path_mode && run_options.verbose && worker_count > 1) {
+    } else if (red_path_parallel_candidate && run_options.verbose && worker_count > 1) {
         std::ostringstream message;
         message << result.path_search_mode << "_threads max_thread="
                 << run_options.max_threads
@@ -5274,6 +5287,8 @@ inline ReductionResult reduce_pd_code(
         check_timeout(run_options);
         const bool top_level_heuristic_mode =
             run_options.max_paths == -1 && !run_options.ban_heuristic;
+        const bool large_initial_heuristic_mode =
+            top_level_heuristic_mode && code.size() >= kHeuristicParallelMinCrossings;
         {
             std::ostringstream message;
             message << "start input_crossings=" << code.size()
@@ -5285,6 +5300,8 @@ inline ReductionResult reduce_pd_code(
                     << " timeout=" << run_options.timeout_seconds
                     << " quit_at_crossing=" << run_options.quit_at_crossing
                     << " heuristic=" << (run_options.ban_heuristic ? "off" : "on")
+                    << " heuristic_parallel_initial="
+                    << (large_initial_heuristic_mode ? "on" : "off")
                     << " reapr=" << (run_options.enable_reapr ? "on" : "off")
                     << " reapr_retry_max=" << run_options.reapr_retry_max;
             emit_progress(run_options, message.str());
@@ -5476,6 +5493,7 @@ inline ReductionResult reduce_pd_code(
             auto run_heuristic_search = [&](bool use_soft_slice) {
                 SimplifierOptions search_options = run_options;
                 search_options.require_applicable = true;
+                search_options.force_heuristic_parallel = large_initial_heuristic_mode;
                 output.last_path_search_mode = search_mode_for_options(search_options);
                 {
                     std::ostringstream message;
@@ -5655,7 +5673,9 @@ inline ReductionResult reduce_pd_code(
             };
 
             if (adaptive_mode) {
-                if (!run_heuristic_search(false)) {
+                const bool use_heuristic_soft_slice =
+                    run_options.timeout_seconds > 0 && !large_initial_heuristic_mode;
+                if (!run_heuristic_search(use_heuristic_soft_slice)) {
                     output.code = canonical_output_code(output.code);
                     emit_progress(run_options, "non_heuristic_handoff canonicalized=yes");
                     const std::vector<AdaptiveStage> order =

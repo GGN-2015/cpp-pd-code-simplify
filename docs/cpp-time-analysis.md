@@ -11,7 +11,7 @@ This page records a C++-only timing experiment on PD codes sampled from
 - Runtime options: `--max-paths -1 --reduction-round -1 --max-thread 16 --bruteforce-budget 200000`.
 - Per-case timeout: `120` seconds. Timed-out, resource-limited, or errored cases are counted as failures and excluded from the scatter plot.
 - Each point is one C++ CLI invocation, so the time includes process startup, parsing, preprocessing, simplification, and final JSON formatting.
-- Generated at local time `2026-07-10 23:04:20` on `Windows-11-10.0.26100-SP0` with Python `3.13.1`.
+- Generated at local time `2026-07-11 06:01:07` on `Windows-11-10.0.26100-SP0` with Python `3.13.1`.
 
 ## Results
 
@@ -30,15 +30,15 @@ algorithm run as the vertical axis.
 | Metric | Value |
 | --- | ---: |
 | Sampled cases | 100 |
-| Completed cases | 100 |
-| Failed cases | 0 |
-| Failure rate | 0.0% |
+| Completed cases | 99 |
+| Failed cases | 1 |
+| Failure rate | 1.0% |
 | Crossing count range | 129 to 397 |
 | Median crossing count | 240.0 |
-| Total completed C++ time | 13.05 min |
-| Mean completed time | 7.831 s |
-| Median completed time | 0.441 s |
-| Max completed time | 1.23 min |
+| Total completed C++ time | 1.19 h |
+| Mean completed time | 43.175 s |
+| Median completed time | 33.322 s |
+| Max completed time | 1.84 min |
 
 Raw artifacts:
 
