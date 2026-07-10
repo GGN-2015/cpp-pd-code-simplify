@@ -130,16 +130,17 @@ sets `resource_limited: true`.
 mid-simplification witnesses. Use `--reduction-round K` to cap the number of
 applied mid-simplification rounds. Every generated PD code is canonicalized
 immediately after it is produced, including after each local cleanup deletion
-and after every applied witness. In heuristic mode, whenever the heuristic
-cannot find an applicable path before the round cap is exhausted, the
-executable first tries the deterministic non-monotone failover. This failover
-allows bounded RIII and validated surgery detours, but accepts only a cleaned
-PD code with fewer crossings. If that does not reduce the diagram, the
-executable runs a brute-force enumeration pass. If brute force finds a
-witness, that witness is applied and the next round starts again in heuristic
-mode. A diagram is treated as stable only after the non-monotone failover,
-brute force, and the final RIII failover all fail on the already-canonical
-current state.
+and after every applied witness. In default heuristic mode, each round uses an
+adaptive deterministic scheduler over `r3_prepass`, `heuristic_search`, and
+`non_monotone`. Productive stages gain priority; misses and soft stage timeouts
+lower priority. If one of these stages reduces the diagram, the result is
+applied and the next round starts again from the canonical PD code. If all
+adaptive stages miss, the executable runs a brute-force enumeration pass. If
+brute force finds a witness, that witness is applied and the next round starts
+again in heuristic mode. A diagram is treated as stable only after the adaptive
+stages, brute force, and the final RIII failover all fail on the
+already-canonical current state. Verbose mode prints the current
+`adaptive_order` and per-stage scores each round.
 Verbose log lines are prefixed with local wall-clock time in
 `YYYY-MM-DD HH:MM:SS` format. When `--max-thread -1` reaches a brute-force
 search phase, verbose logs also include `actual_threads`, the worker count

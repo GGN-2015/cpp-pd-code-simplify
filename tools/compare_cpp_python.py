@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Sequence
 
@@ -100,6 +102,52 @@ def maybe_add_ban(command: List[str], ban_heuristic: bool) -> List[str]:
     return command + (["--ban-heuristic"] if ban_heuristic else [])
 
 
+def progress_log(message: str, quiet: bool = False) -> None:
+    if quiet:
+        return
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[compare {timestamp}] {message}", file=sys.stderr, flush=True)
+
+
+def run_stage(
+    stage: str,
+    command: List[str],
+    *,
+    verbose: bool,
+    quiet_progress: bool,
+    progress_interval: float,
+    env: Dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    progress_log(f"{stage}: start", quiet_progress)
+    started = time.perf_counter()
+    proc = subprocess.Popen(
+        command,
+        cwd=str(ROOT),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=None if verbose else subprocess.PIPE,
+        env=env,
+    )
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=progress_interval)
+            break
+        except subprocess.TimeoutExpired:
+            elapsed = time.perf_counter() - started
+            progress_log(f"{stage}: still running elapsed={elapsed:.3f}s", quiet_progress)
+    elapsed = time.perf_counter() - started
+    progress_log(
+        f"{stage}: done returncode={proc.returncode} elapsed={elapsed:.3f}s",
+        quiet_progress,
+    )
+    return subprocess.CompletedProcess(
+        command,
+        proc.returncode,
+        stdout,
+        stderr,
+    )
+
+
 def run_cpp_batch(
     cpp_exe: str,
     pd_file: str,
@@ -109,6 +157,9 @@ def run_cpp_batch(
     max_thread: int,
     bruteforce_budget: int,
     verbose: bool,
+    quiet_progress: bool,
+    progress_interval: float,
+    case_count: int,
 ) -> List[Dict[str, object]]:
     command = [
         cpp_exe,
@@ -126,12 +177,12 @@ def run_cpp_batch(
     ]
     if verbose:
         command.append("--verbose")
-    proc = subprocess.run(
+    proc = run_stage(
+        f"C++ CLI batch cases={case_count}",
         maybe_add_ban(command, ban_heuristic),
-        cwd=str(ROOT),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=None if verbose else subprocess.PIPE,
+        verbose=verbose,
+        quiet_progress=quiet_progress,
+        progress_interval=progress_interval,
     )
     if proc.returncode not in (0, 1, 2):
         stderr = proc.stderr.strip() if proc.stderr else ""
@@ -147,6 +198,9 @@ def run_python_cli_batch(
     max_thread: int,
     bruteforce_budget: int,
     verbose: bool,
+    quiet_progress: bool,
+    progress_interval: float,
+    case_count: int,
 ) -> List[Dict[str, object]]:
     command = [
         sys.executable,
@@ -165,12 +219,12 @@ def run_python_cli_batch(
     ]
     if verbose:
         command.append("--verbose")
-    proc = subprocess.run(
+    proc = run_stage(
+        f"Python prototype batch cases={case_count}",
         maybe_add_ban(command, ban_heuristic),
-        cwd=str(ROOT),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=None if verbose else subprocess.PIPE,
+        verbose=verbose,
+        quiet_progress=quiet_progress,
+        progress_interval=progress_interval,
     )
     if proc.returncode not in (0, 1, 2):
         stderr = proc.stderr.strip() if proc.stderr else ""
@@ -198,6 +252,9 @@ def run_interface_batch(
     bruteforce_budget: int,
     interface_cxx: str | None,
     verbose: bool,
+    quiet_progress: bool,
+    progress_interval: float,
+    case_count: int,
 ) -> List[Dict[str, object]]:
     command = [
         sys.executable,
@@ -216,12 +273,12 @@ def run_interface_batch(
     ]
     if verbose:
         command.append("--verbose")
-    proc = subprocess.run(
+    proc = run_stage(
+        f"Python C++ interface batch cases={case_count}",
         maybe_add_ban(command, ban_heuristic),
-        cwd=str(ROOT),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=None if verbose else subprocess.PIPE,
+        verbose=verbose,
+        quiet_progress=quiet_progress,
+        progress_interval=progress_interval,
         env=interface_env(interface_cxx),
     )
     if proc.returncode not in (0, 1, 2):
@@ -232,8 +289,19 @@ def run_interface_batch(
     return as_list(json.loads(proc.stdout))
 
 
+NON_SEMANTIC_RESULT_KEYS = {
+    "label",
+    "tested_red_paths",
+    "tested_green_paths",
+}
+
+
 def canonical(data: Dict[str, object]) -> Dict[str, object]:
-    return data
+    return {
+        key: value
+        for key, value in data.items()
+        if key not in NON_SEMANTIC_RESULT_KEYS
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -252,12 +320,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--interface-cxx", help="compiler used by the Python C++ interface")
     parser.add_argument("--pd-code", action="append", help="additional literal PD[...] case")
     parser.add_argument("--pd-file", action="append", help="additional PD input file")
+    parser.add_argument("--quiet-progress", action="store_true", help="suppress compare-stage progress logs")
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=30.0,
+        help="seconds between compare-stage heartbeat logs; default 30",
+    )
     args = parser.parse_args(argv)
+    if args.progress_interval <= 0:
+        parser.error("--progress-interval must be positive")
 
+    progress_log("initializing differential test", args.quiet_progress)
     cpp_exe = args.cpp_exe or default_cpp_exe()
     cases = load_cases(args)
+    progress_log(
+        f"loaded {len(cases)} cases suite={args.suite} "
+        f"include_benchmark={args.include_benchmark} "
+        f"include_interface={args.include_interface}",
+        args.quiet_progress,
+    )
     mismatches: List[str] = []
     pd_file = write_case_file(cases)
+    progress_log(f"wrote temporary batch file {pd_file}", args.quiet_progress)
     try:
         cpp_results = [
             canonical(item)
@@ -270,8 +355,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.max_thread,
                 args.bruteforce_budget,
                 args.verbose,
+                args.quiet_progress,
+                args.progress_interval,
+                len(cases),
             )
         ]
+        progress_log(f"C++ CLI returned {len(cpp_results)} result objects", args.quiet_progress)
         py_results = [
             canonical(item)
             for item in run_python_cli_batch(
@@ -282,8 +371,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.max_thread,
                 args.bruteforce_budget,
                 args.verbose,
+                args.quiet_progress,
+                args.progress_interval,
+                len(cases),
             )
         ]
+        progress_log(f"Python prototype returned {len(py_results)} result objects", args.quiet_progress)
         interface_results = None
         if args.include_interface:
             interface_results = [
@@ -297,10 +390,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.bruteforce_budget,
                     args.interface_cxx,
                     args.verbose,
+                    args.quiet_progress,
+                    args.progress_interval,
+                    len(cases),
                 )
             ]
+            progress_log(
+                f"Python C++ interface returned {len(interface_results)} result objects",
+                args.quiet_progress,
+            )
     finally:
         Path(pd_file).unlink(missing_ok=True)
+        progress_log(f"removed temporary batch file {pd_file}", args.quiet_progress)
 
     if len(cpp_results) != len(py_results):
         raise RuntimeError(f"result count mismatch: C++={len(cpp_results)} Python={len(py_results)}")
@@ -309,6 +410,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"result count mismatch: C++={len(cpp_results)} Interface={len(interface_results)}"
         )
 
+    progress_log(f"comparing {len(cases)} result rows", args.quiet_progress)
     for index, (name, cpp_result, py_result) in enumerate(zip(cases, cpp_results, py_results)):
         interface_result = None
         if interface_results is not None:
@@ -327,8 +429,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"[OK] {name}: found={cpp_result['simplification_found']}")
 
     if mismatches:
+        progress_log(f"finished with {len(mismatches)} mismatches", args.quiet_progress)
         print(f"{len(mismatches)} mismatches: {', '.join(mismatches)}", file=sys.stderr)
         return 1
+    progress_log("finished with no mismatches", args.quiet_progress)
     print(f"All {len(cases)} cases matched.")
     return 0
 

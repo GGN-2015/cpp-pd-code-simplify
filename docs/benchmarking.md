@@ -117,8 +117,8 @@ round where a run is spending time.
 Each measurement repeat writes the selected cases to one temporary multi-line
 PD-code file, then starts each engine once to process the whole file. The same
 batch-mode run compares C++ CLI, Python C++ interface, and Python JSON outputs
-exactly. The chart reports average time per PD code and peak RSS for the whole
-batch.
+semantically, ignoring run labels and internal work counters. The chart reports
+average time per PD code and peak RSS for the whole batch.
 
 All three engines run the same default preprocessing pipeline before the
 mid-simplification search: R1-move removal, true R2-bigon removal, and

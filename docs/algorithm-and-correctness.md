@@ -165,19 +165,27 @@ not a topological move; it only prevents later searches from depending on a
 stale internal row order, edge numbering, or crossing orientation.
 
 The default `--reduction-round -1` repeats until no applicable witness remains.
-In default heuristic mode, each round first runs a small deterministic RIII
-prepass. If this cheap prepass lowers the crossing count, the main loop starts
-over from the new canonical diagram before spending time on red-green path
-search. If the prepass cannot reduce the diagram, the heuristic red-green
-search runs. When the heuristic cannot find a witness, the simplifier tries the
-deterministic non-monotone failover described below. If that failover finds a
-temporary sequence whose cleaned result lowers the crossing count, the sequence
-is applied, canonicalized, and the loop continues in heuristic mode. If the
-non-monotone failover also fails, the simplifier runs a brute-force pass from
-the already-canonical current diagram. If brute force finds a witness, that
-witness is applied, canonicalized, and the loop continues in heuristic mode. If
-brute force also fails, the larger deterministic RIII failover described below
-is tried before the diagram is reported as final.
+In default heuristic mode, each round uses a deterministic adaptive scheduler
+over three crossing-reduction strategies: the small RIII prepass, the heuristic
+red-green search, and the deterministic non-monotone failover described below.
+Each strategy has fixed base priority, then gains priority after successes and
+loses priority after misses or soft stage timeouts. This prevents a strategy
+that keeps missing from permanently blocking later strategies, while allowing a
+strategy that is currently productive to run earlier in the next round. Ties use
+the fixed order `r3_prepass`, `heuristic_search`, `non_monotone`, so the result
+is deterministic.
+
+The adaptive stages are tried in the current score order. If one stage lowers
+the crossing count, its result is applied, canonicalized, and the next round
+starts from the new diagram. The RIII prepass has a 15 second soft slice, the
+heuristic search has a 30 second soft slice, and non-monotone failover has a 60
+second soft slice. A soft slice only changes that stage's scheduler score; the
+global `--timeout` remains the hard job timeout. If all adaptive stages miss,
+the simplifier runs a brute-force pass from the already-canonical current
+diagram. If brute force finds a witness, that witness is applied, canonicalized,
+and the loop continues in heuristic mode. If brute force also fails, the larger
+deterministic RIII failover described below is tried before the diagram is
+reported as final.
 
 Brute-force search has a separate resource guard, `bruteforce_budget`, exposed
 as `--bruteforce-budget` in the CLIs. The default budget is `200000`
@@ -192,8 +200,9 @@ finishing the brute-force proof attempt.
 Some diagrams need a short detour before a crossing-decreasing move becomes
 visible. The non-monotone failover is a deterministic beam search over
 temporary diagrams whose crossing count is allowed to stay the same or rise by
-a small fixed amount. It is used only after the normal heuristic red-green
-search misses a direct witness and before the terminal brute-force proof pass.
+a small fixed amount. In default heuristic mode it participates in the adaptive
+stage scheduler with the RIII prepass and heuristic red-green search. It remains
+before the terminal brute-force proof pass.
 
 Each beam node stores a canonical PD code, the explicit crossingless-component
 count, and the sequence of temporary steps that produced it. Candidate steps

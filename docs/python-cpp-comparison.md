@@ -11,9 +11,13 @@ It also includes a PyPI-ready Python C++ interface package documented in
 
 ## Differential Testing
 
-The differential test runner compares their JSON outputs exactly. Both
-implementations use the default preprocessing pipeline first: R1-move removal,
-true R2-bigon removal, then nugatory-crossing removal.
+The differential test runner compares semantic JSON outputs: final PD code,
+crossing count, component data, move counts, timeout/resource flags, and REAPR
+status. It intentionally ignores run-labels and work counters such as
+`tested_red_paths` and `tested_green_paths`, because C++ and Python can reach
+the same result with different internal counters when soft stage time slices
+are involved. Both implementations use the default preprocessing pipeline
+first: R1-move removal, true R2-bigon removal, then nugatory-crossing removal.
 
 ```sh
 .\.venv\Scripts\python tools\compare_cpp_python.py ^
@@ -44,6 +48,11 @@ green-path sampling and the default brute-force safety budget:
 
 On Linux and macOS, use `.venv/bin/python` instead of
 `.\.venv\Scripts\python`.
+
+The runner prints timestamped progress messages to stderr before each child
+stage starts, at regular heartbeat intervals while a child is still running,
+and after each stage exits. Use `--quiet-progress` to suppress these messages
+or `--progress-interval SECONDS` to change the heartbeat interval.
 
 Return code `0` from either simplifier means every item was processed
 successfully, including inputs that are already stable. Return code `2` means

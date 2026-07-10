@@ -36,11 +36,12 @@ also has a separate safety budget: `--bruteforce-budget 200000` by default,
 or `--bruteforce-budget -1` for no budget. Budget exhaustion returns the
 current best PD code with `resource_limited=true`.
 
-In the full high-level reduction loop, a heuristic miss is not immediately
-treated as stability. The simplifier first tries the deterministic
-non-monotone failover described in
-[Algorithm and Correctness](algorithm-and-correctness.md), then runs the
-brute-force proof pass if the failover does not lower the crossing count.
+In the full high-level reduction loop, heuristic search is one adaptive stage
+beside the small RIII prepass and the deterministic non-monotone failover
+described in [Algorithm and Correctness](algorithm-and-correctness.md). The
+stage order is recalculated each round from deterministic success, miss, and
+soft-timeout counters. If every adaptive stage misses, the simplifier runs the
+brute-force proof pass.
 
 ## Scoring
 

@@ -232,6 +232,7 @@ constexpr int kR3FailoverMaxDepth = 8;
 constexpr int kR3FailoverMaxStates = 4096;
 constexpr int kR3FailoverTimeSliceSeconds = 30;
 constexpr int kMidSearchTimeSliceSeconds = 30;
+constexpr int kNonMonotoneTimeSliceSeconds = 60;
 constexpr int kNonMonotoneMaxRedLength = 80;
 constexpr int kNonMonotoneMaxDepth = 72;
 constexpr int kNonMonotoneBeamWidth = 32;
@@ -290,6 +291,18 @@ void trim_pure_function_cache(Cache& cache) {
     if (cache.size() >= kPureFunctionCacheLimit) {
         cache.clear();
     }
+}
+
+template <typename Value>
+struct SharedPureFunctionCache {
+    std::mutex mutex;
+    std::unordered_map<std::string, Value> values;
+};
+
+template <typename Value>
+SharedPureFunctionCache<Value>& shared_pure_function_cache() {
+    static SharedPureFunctionCache<Value>* cache = new SharedPureFunctionCache<Value>();
+    return *cache;
 }
 
 std::string raw_code_cache_key(const PDCode& code) {
@@ -1305,10 +1318,13 @@ std::vector<ReidemeisterIIIMove> possible_reidemeister_iii_moves(const PDCode& c
     }
 
     const std::string cache_key = raw_code_cache_key(code);
-    thread_local std::unordered_map<std::string, std::vector<ReidemeisterIIIMove>> cache;
-    const auto cached = cache.find(cache_key);
-    if (cached != cache.end()) {
-        return cached->second;
+    auto& cache = shared_pure_function_cache<std::vector<ReidemeisterIIIMove>>();
+    {
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        const auto cached = cache.values.find(cache_key);
+        if (cached != cache.values.end()) {
+            return cached->second;
+        }
     }
 
     std::vector<ReidemeisterIIIMove> moves;
@@ -1371,8 +1387,11 @@ std::vector<ReidemeisterIIIMove> possible_reidemeister_iii_moves(const PDCode& c
         }
         return false;
     });
-    trim_pure_function_cache(cache);
-    cache.emplace(cache_key, moves);
+    {
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        trim_pure_function_cache(cache.values);
+        cache.values.emplace(cache_key, moves);
+    }
     return moves;
 }
 
@@ -2506,14 +2525,20 @@ void emit_step_pd(const SimplifierOptions& options, int round, const PDCode& cod
 
 PDCode canonical_output_code(const PDCode& code) {
     const std::string cache_key = raw_code_cache_key(code);
-    thread_local std::unordered_map<std::string, PDCode> cache;
-    const auto cached = cache.find(cache_key);
-    if (cached != cache.end()) {
-        return cached->second;
+    auto& cache = shared_pure_function_cache<PDCode>();
+    {
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        const auto cached = cache.values.find(cache_key);
+        if (cached != cache.values.end()) {
+            return cached->second;
+        }
     }
     PDCode canonical = parse_pd_code(format_final_pd_code(code));
-    trim_pure_function_cache(cache);
-    cache.emplace(cache_key, canonical);
+    {
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        trim_pure_function_cache(cache.values);
+        cache.values.emplace(cache_key, canonical);
+    }
     return canonical;
 }
 
@@ -3538,16 +3563,22 @@ inline ComponentAnalysis analyze_components(
 
     const std::string cache_key =
         std::to_string(known_crossingless_components) + "|" + raw_code_cache_key(code);
-    thread_local std::unordered_map<std::string, ComponentAnalysis> cache;
-    const auto cached = cache.find(cache_key);
-    if (cached != cache.end()) {
-        return cached->second;
+    auto& cache = shared_pure_function_cache<ComponentAnalysis>();
+    {
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        const auto cached = cache.values.find(cache_key);
+        if (cached != cache.values.end()) {
+            return cached->second;
+        }
     }
 
     Diagram diagram(code);
     analysis.components = component_summaries(diagram);
-    trim_pure_function_cache(cache);
-    cache.emplace(cache_key, analysis);
+    {
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        trim_pure_function_cache(cache.values);
+        cache.values.emplace(cache_key, analysis);
+    }
     return analysis;
 }
 
@@ -5104,6 +5135,162 @@ inline SimplificationResult find_simplification(
     return result;
 }
 
+enum class AdaptiveStage {
+    R3Prepass,
+    HeuristicSearch,
+    NonMonotone
+};
+
+struct AdaptiveStageStats {
+    int successes = 0;
+    int misses = 0;
+    int timeouts = 0;
+    int consecutive_successes = 0;
+    int consecutive_misses = 0;
+    int consecutive_timeouts = 0;
+};
+
+struct AdaptiveScheduler {
+    AdaptiveStageStats r3_prepass;
+    AdaptiveStageStats heuristic_search;
+    AdaptiveStageStats non_monotone;
+};
+
+inline const char* adaptive_stage_name(AdaptiveStage stage) {
+    switch (stage) {
+        case AdaptiveStage::R3Prepass:
+            return "r3_prepass";
+        case AdaptiveStage::HeuristicSearch:
+            return "heuristic_search";
+        case AdaptiveStage::NonMonotone:
+            return "non_monotone";
+    }
+    return "unknown";
+}
+
+inline int adaptive_stage_base_order(AdaptiveStage stage) {
+    switch (stage) {
+        case AdaptiveStage::R3Prepass:
+            return 0;
+        case AdaptiveStage::HeuristicSearch:
+            return 1;
+        case AdaptiveStage::NonMonotone:
+            return 2;
+    }
+    return 3;
+}
+
+inline AdaptiveStageStats& adaptive_stage_stats(AdaptiveScheduler& scheduler, AdaptiveStage stage) {
+    switch (stage) {
+        case AdaptiveStage::R3Prepass:
+            return scheduler.r3_prepass;
+        case AdaptiveStage::HeuristicSearch:
+            return scheduler.heuristic_search;
+        case AdaptiveStage::NonMonotone:
+            return scheduler.non_monotone;
+    }
+    return scheduler.non_monotone;
+}
+
+inline const AdaptiveStageStats& adaptive_stage_stats(
+    const AdaptiveScheduler& scheduler,
+    AdaptiveStage stage) {
+    switch (stage) {
+        case AdaptiveStage::R3Prepass:
+            return scheduler.r3_prepass;
+        case AdaptiveStage::HeuristicSearch:
+            return scheduler.heuristic_search;
+        case AdaptiveStage::NonMonotone:
+            return scheduler.non_monotone;
+    }
+    return scheduler.non_monotone;
+}
+
+inline int adaptive_stage_base_score(AdaptiveStage stage) {
+    switch (stage) {
+        case AdaptiveStage::R3Prepass:
+            return 300;
+        case AdaptiveStage::HeuristicSearch:
+            return 240;
+        case AdaptiveStage::NonMonotone:
+            return 120;
+    }
+    return 0;
+}
+
+inline int adaptive_stage_score(const AdaptiveScheduler& scheduler, AdaptiveStage stage) {
+    const AdaptiveStageStats& stats = adaptive_stage_stats(scheduler, stage);
+    return adaptive_stage_base_score(stage)
+        + stats.successes * 70
+        + stats.consecutive_successes * 180
+        - stats.misses * 35
+        - stats.consecutive_misses * 45
+        - stats.timeouts * 140
+        - stats.consecutive_timeouts * 260;
+}
+
+inline void record_adaptive_stage_success(AdaptiveScheduler& scheduler, AdaptiveStage stage) {
+    AdaptiveStageStats& stats = adaptive_stage_stats(scheduler, stage);
+    ++stats.successes;
+    ++stats.consecutive_successes;
+    stats.consecutive_misses = 0;
+    stats.consecutive_timeouts = 0;
+}
+
+inline void record_adaptive_stage_miss(AdaptiveScheduler& scheduler, AdaptiveStage stage) {
+    AdaptiveStageStats& stats = adaptive_stage_stats(scheduler, stage);
+    ++stats.misses;
+    ++stats.consecutive_misses;
+    stats.consecutive_successes = 0;
+    stats.consecutive_timeouts = 0;
+}
+
+inline void record_adaptive_stage_timeout(AdaptiveScheduler& scheduler, AdaptiveStage stage) {
+    AdaptiveStageStats& stats = adaptive_stage_stats(scheduler, stage);
+    ++stats.timeouts;
+    ++stats.consecutive_timeouts;
+    ++stats.consecutive_misses;
+    stats.consecutive_successes = 0;
+}
+
+inline std::vector<AdaptiveStage> adaptive_stage_order(const AdaptiveScheduler& scheduler) {
+    std::vector<AdaptiveStage> stages{
+        AdaptiveStage::R3Prepass,
+        AdaptiveStage::HeuristicSearch,
+        AdaptiveStage::NonMonotone};
+    std::stable_sort(stages.begin(), stages.end(), [&](AdaptiveStage lhs, AdaptiveStage rhs) {
+        const int lhs_score = adaptive_stage_score(scheduler, lhs);
+        const int rhs_score = adaptive_stage_score(scheduler, rhs);
+        if (lhs_score != rhs_score) {
+            return lhs_score > rhs_score;
+        }
+        return adaptive_stage_base_order(lhs) < adaptive_stage_base_order(rhs);
+    });
+    return stages;
+}
+
+inline void emit_adaptive_scheduler_state(
+    const SimplifierOptions& options,
+    int round,
+    const AdaptiveScheduler& scheduler,
+    const std::vector<AdaptiveStage>& order) {
+    std::ostringstream message;
+    message << "round " << round << " adaptive_order";
+    for (AdaptiveStage stage : order) {
+        const AdaptiveStageStats& stats = adaptive_stage_stats(scheduler, stage);
+        message << ' ' << adaptive_stage_name(stage)
+                << "(score=" << adaptive_stage_score(scheduler, stage)
+                << ",successes=" << stats.successes
+                << ",misses=" << stats.misses
+                << ",timeouts=" << stats.timeouts
+                << ",success_streak=" << stats.consecutive_successes
+                << ",miss_streak=" << stats.consecutive_misses
+                << ",timeout_streak=" << stats.consecutive_timeouts
+                << ')';
+    }
+    emit_progress(options, message.str());
+}
+
 inline ReductionResult reduce_pd_code(
     const PDCode& code,
     std::size_t known_crossingless_components,
@@ -5157,6 +5344,7 @@ inline ReductionResult reduce_pd_code(
         output.nugatory_crossing_moves = prepared.nugatory_crossing_moves;
         std::set<std::string> seen_reduction_states;
         seen_reduction_states.insert(format_final_pd_code(output.code));
+        AdaptiveScheduler adaptive_scheduler;
         best_code = output.code;
         best_crossingless_components = output.crossingless_components;
         check_timeout(run_options);
@@ -5234,7 +5422,11 @@ inline ReductionResult reduce_pd_code(
                (reduction_round < 0 || output.mid_simplification_rounds < reduction_round)) {
             check_timeout(run_options);
             const int round = output.mid_simplification_rounds + 1;
-            if (run_options.max_paths == -1 && !run_options.ban_heuristic) {
+            const bool adaptive_mode = run_options.max_paths == -1 && !run_options.ban_heuristic;
+            SimplificationResult search;
+            bool restart_round = false;
+
+            auto run_r3_prepass = [&]() {
                 {
                     std::ostringstream message;
                     message << "round " << round
@@ -5244,6 +5436,7 @@ inline ReductionResult reduce_pd_code(
                     emit_progress(run_options, message.str());
                 }
                 ReidemeisterIIIFailoverResult r3_prepass;
+                bool stage_timeout = false;
                 try {
                     const SimplifierOptions r3_options =
                         with_time_slice(run_options, kR3PrepassTimeSliceSeconds);
@@ -5257,6 +5450,7 @@ inline ReductionResult reduce_pd_code(
                     if (timeout_expired(run_options)) {
                         throw;
                     }
+                    stage_timeout = true;
                     std::ostringstream timeout_message;
                     timeout_message << "round " << round
                                     << " r3_prepass_timeout seconds="
@@ -5277,7 +5471,12 @@ inline ReductionResult reduce_pd_code(
                             << " nugatory_moves=" << r3_prepass.nugatory_crossing_moves;
                     emit_progress(run_options, message.str());
                 }
+                if (stage_timeout) {
+                    record_adaptive_stage_timeout(adaptive_scheduler, AdaptiveStage::R3Prepass);
+                    return false;
+                }
                 if (r3_prepass.found) {
+                    record_adaptive_stage_success(adaptive_scheduler, AdaptiveStage::R3Prepass);
                     output.code = canonical_output_code(r3_prepass.code);
                     output.crossingless_components = r3_prepass.crossingless_components;
                     seen_reduction_states.insert(format_final_pd_code(output.code));
@@ -5290,57 +5489,81 @@ inline ReductionResult reduce_pd_code(
                     output.reidemeister_iii_moves += r3_prepass.reidemeister_iii_moves;
                     output.nugatory_crossing_moves += r3_prepass.nugatory_crossing_moves;
                     if (stop_if_quit_at_crossing("r3_prepass")) {
-                        break;
+                        restart_round = true;
+                        return true;
                     }
-                    continue;
+                    restart_round = true;
+                    return true;
                 }
-            }
-            SimplifierOptions search_options = run_options;
-            search_options.require_applicable = true;
-            output.last_path_search_mode = search_mode_for_options(search_options);
-            {
-                std::ostringstream message;
-                message << "round " << round
-                        << " search_start crossings=" << output.code.size()
-                        << " mode=" << output.last_path_search_mode
-                        << " max_thread=" << search_options.max_threads;
-                emit_progress(run_options, message.str());
-            }
-            SimplificationResult search;
-            try {
-                SimplifierOptions sliced_search_options = search_options;
-                if (run_options.max_paths == -1 && !run_options.ban_heuristic) {
-                    sliced_search_options =
-                        with_time_slice(search_options, kMidSearchTimeSliceSeconds);
-                }
-                search = find_simplification(output.code, sliced_search_options);
-            } catch (const TimeoutError&) {
-                if (timeout_expired(run_options)) {
-                    throw;
-                }
-                search.path_search_mode = search_mode_for_options(search_options);
-                std::ostringstream timeout_message;
-                timeout_message << "round " << round
-                                << " search_timeout seconds="
-                                << kMidSearchTimeSliceSeconds;
-                emit_progress(run_options, timeout_message.str());
-            }
-            output.tested_red_paths += search.tested_red_paths;
-            output.tested_green_paths += search.tested_green_paths;
-            output.last_path_search_mode = search.path_search_mode;
-            output.resource_limited = output.resource_limited || search.resource_limited;
-            {
-                std::ostringstream message;
-                message << "round " << round
-                        << " search_done found=" << (search.found ? "yes" : "no")
-                        << " mode=" << search.path_search_mode
-                        << " tested_red=" << search.tested_red_paths
-                        << " tested_green=" << search.tested_green_paths
-                        << " resource_limited=" << (search.resource_limited ? "yes" : "no");
-                emit_progress(run_options, message.str());
-            }
+                record_adaptive_stage_miss(adaptive_scheduler, AdaptiveStage::R3Prepass);
+                return false;
+            };
 
-            if (!search.found && run_options.max_paths == -1 && !run_options.ban_heuristic) {
+            auto run_heuristic_search = [&]() {
+                SimplifierOptions search_options = run_options;
+                search_options.require_applicable = true;
+                output.last_path_search_mode = search_mode_for_options(search_options);
+                {
+                    std::ostringstream message;
+                    message << "round " << round
+                            << " search_start crossings=" << output.code.size()
+                            << " mode=" << output.last_path_search_mode
+                            << " max_thread=" << search_options.max_threads;
+                    emit_progress(run_options, message.str());
+                }
+                bool stage_timeout = false;
+                try {
+                    SimplifierOptions sliced_search_options = search_options;
+                    if (adaptive_mode) {
+                        sliced_search_options =
+                            with_time_slice(search_options, kMidSearchTimeSliceSeconds);
+                    }
+                    search = find_simplification(output.code, sliced_search_options);
+                } catch (const TimeoutError&) {
+                    if (timeout_expired(run_options)) {
+                        throw;
+                    }
+                    stage_timeout = true;
+                    search.path_search_mode = search_mode_for_options(search_options);
+                    std::ostringstream timeout_message;
+                    timeout_message << "round " << round
+                                    << " search_timeout seconds="
+                                    << kMidSearchTimeSliceSeconds;
+                    emit_progress(run_options, timeout_message.str());
+                }
+                output.tested_red_paths += search.tested_red_paths;
+                output.tested_green_paths += search.tested_green_paths;
+                output.last_path_search_mode = search.path_search_mode;
+                output.resource_limited = output.resource_limited || search.resource_limited;
+                {
+                    std::ostringstream message;
+                    message << "round " << round
+                            << " search_done found=" << (search.found ? "yes" : "no")
+                            << " mode=" << search.path_search_mode
+                            << " tested_red=" << search.tested_red_paths
+                            << " tested_green=" << search.tested_green_paths
+                            << " resource_limited=" << (search.resource_limited ? "yes" : "no");
+                    emit_progress(run_options, message.str());
+                }
+                if (adaptive_mode) {
+                    if (stage_timeout) {
+                        record_adaptive_stage_timeout(
+                            adaptive_scheduler,
+                            AdaptiveStage::HeuristicSearch);
+                    } else if (search.found) {
+                        record_adaptive_stage_success(
+                            adaptive_scheduler,
+                            AdaptiveStage::HeuristicSearch);
+                    } else {
+                        record_adaptive_stage_miss(
+                            adaptive_scheduler,
+                            AdaptiveStage::HeuristicSearch);
+                    }
+                }
+                return search.found;
+            };
+
+            auto run_non_monotone = [&]() {
                 {
                     std::ostringstream message;
                     message << "round " << round
@@ -5351,11 +5574,26 @@ inline ReductionResult reduce_pd_code(
                             << " max_total_green_tests=" << kNonMonotoneMaxTotalGreenTests;
                     emit_progress(run_options, message.str());
                 }
-                const NonMonotoneSearchResult non_monotone =
-                    find_non_monotone_reduction(
+                NonMonotoneSearchResult non_monotone;
+                bool stage_timeout = false;
+                try {
+                    const SimplifierOptions non_monotone_options =
+                        with_time_slice(run_options, kNonMonotoneTimeSliceSeconds);
+                    non_monotone = find_non_monotone_reduction(
                         output.code,
                         output.crossingless_components,
-                        run_options);
+                        non_monotone_options);
+                } catch (const TimeoutError&) {
+                    if (timeout_expired(run_options)) {
+                        throw;
+                    }
+                    stage_timeout = true;
+                    std::ostringstream timeout_message;
+                    timeout_message << "round " << round
+                                    << " non_monotone_timeout seconds="
+                                    << kNonMonotoneTimeSliceSeconds;
+                    emit_progress(run_options, timeout_message.str());
+                }
                 output.tested_red_paths += non_monotone.tested_red_paths;
                 output.tested_green_paths += non_monotone.tested_green_paths;
                 {
@@ -5376,7 +5614,12 @@ inline ReductionResult reduce_pd_code(
                             << " nugatory_moves=" << non_monotone.nugatory_crossing_moves;
                     emit_progress(run_options, message.str());
                 }
+                if (stage_timeout) {
+                    record_adaptive_stage_timeout(adaptive_scheduler, AdaptiveStage::NonMonotone);
+                    return false;
+                }
                 if (non_monotone.found) {
+                    record_adaptive_stage_success(adaptive_scheduler, AdaptiveStage::NonMonotone);
                     for (const NonMonotoneStep& step : non_monotone.steps) {
                         if (reduction_round >= 0 &&
                             output.mid_simplification_rounds >= reduction_round) {
@@ -5416,12 +5659,43 @@ inline ReductionResult reduce_pd_code(
                             break;
                         }
                     }
-                    if (output.stopped_by_crossing_limit) {
-                        break;
+                    restart_round = true;
+                    return true;
+                }
+                record_adaptive_stage_miss(adaptive_scheduler, AdaptiveStage::NonMonotone);
+                return false;
+            };
+
+            if (adaptive_mode) {
+                const std::vector<AdaptiveStage> order =
+                    adaptive_stage_order(adaptive_scheduler);
+                emit_adaptive_scheduler_state(run_options, round, adaptive_scheduler, order);
+                for (AdaptiveStage stage : order) {
+                    if (stage == AdaptiveStage::R3Prepass) {
+                        if (run_r3_prepass()) {
+                            break;
+                        }
+                    } else if (stage == AdaptiveStage::HeuristicSearch) {
+                        if (run_heuristic_search()) {
+                            break;
+                        }
+                    } else {
+                        if (run_non_monotone()) {
+                            break;
+                        }
                     }
+                }
+                if (output.stopped_by_crossing_limit) {
+                    break;
+                }
+                if (restart_round) {
                     continue;
                 }
+            } else {
+                (void)run_heuristic_search();
+            }
 
+            if (!search.found && adaptive_mode) {
                 SimplifierOptions brute_options = run_options;
                 brute_options.max_paths = -1;
                 brute_options.ban_heuristic = true;

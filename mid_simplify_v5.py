@@ -36,8 +36,12 @@ HEURISTIC_MAX_PATH_BUDGET = 384
 HEURISTIC_BEST_LOOKAHEAD_BATCHES = 8
 R3_FAILOVER_MAX_DEPTH = 8
 R3_FAILOVER_MAX_STATES = 4096
+R3_FAILOVER_TIME_SLICE_SECONDS = 30
 R3_PREPASS_MAX_DEPTH = 4
 R3_PREPASS_MAX_STATES = 256
+R3_PREPASS_TIME_SLICE_SECONDS = 15
+MID_SEARCH_TIME_SLICE_SECONDS = 30
+NON_MONOTONE_TIME_SLICE_SECONDS = 60
 NON_MONOTONE_MAX_RED_LENGTH = 80
 NON_MONOTONE_MAX_DEPTH = 72
 NON_MONOTONE_BEAM_WIDTH = 32
@@ -187,6 +191,21 @@ def remaining_timeout_seconds(timeout: int, deadline: Optional[float]) -> Option
     if remaining <= 0:
         raise PdCodeSimplifyTimeoutError(f"timeout after {timeout} seconds")
     return remaining
+
+
+def timeout_expired(deadline: Optional[float]) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def with_time_slice(
+    timeout: int,
+    deadline: Optional[float],
+    seconds: int,
+) -> Tuple[int, Optional[float]]:
+    soft_deadline = time.monotonic() + seconds
+    if deadline is None or soft_deadline < deadline:
+        return seconds, soft_deadline
+    return timeout, deadline
 
 
 @dataclass(frozen=True, order=True)
@@ -386,6 +405,109 @@ class ReductionResult:
             "resource_limited": self.resource_limited,
         })
         return data
+
+
+@dataclass
+class AdaptiveStageStats:
+    successes: int = 0
+    misses: int = 0
+    timeouts: int = 0
+    consecutive_successes: int = 0
+    consecutive_misses: int = 0
+    consecutive_timeouts: int = 0
+
+
+@dataclass
+class AdaptiveScheduler:
+    r3_prepass: AdaptiveStageStats = field(default_factory=AdaptiveStageStats)
+    heuristic_search: AdaptiveStageStats = field(default_factory=AdaptiveStageStats)
+    non_monotone: AdaptiveStageStats = field(default_factory=AdaptiveStageStats)
+
+
+ADAPTIVE_STAGE_ORDER = ("r3_prepass", "heuristic_search", "non_monotone")
+ADAPTIVE_STAGE_BASE_SCORE = {
+    "r3_prepass": 300,
+    "heuristic_search": 240,
+    "non_monotone": 120,
+}
+
+
+def _adaptive_stage_stats(scheduler: AdaptiveScheduler, stage: str) -> AdaptiveStageStats:
+    if stage == "r3_prepass":
+        return scheduler.r3_prepass
+    if stage == "heuristic_search":
+        return scheduler.heuristic_search
+    if stage == "non_monotone":
+        return scheduler.non_monotone
+    raise ValueError(f"unknown adaptive stage: {stage}")
+
+
+def _adaptive_stage_score(scheduler: AdaptiveScheduler, stage: str) -> int:
+    stats = _adaptive_stage_stats(scheduler, stage)
+    return (
+        ADAPTIVE_STAGE_BASE_SCORE[stage]
+        + stats.successes * 70
+        + stats.consecutive_successes * 180
+        - stats.misses * 35
+        - stats.consecutive_misses * 45
+        - stats.timeouts * 140
+        - stats.consecutive_timeouts * 260
+    )
+
+
+def _adaptive_stage_order(scheduler: AdaptiveScheduler) -> List[str]:
+    return sorted(
+        ADAPTIVE_STAGE_ORDER,
+        key=lambda stage: (
+            -_adaptive_stage_score(scheduler, stage),
+            ADAPTIVE_STAGE_ORDER.index(stage),
+        ),
+    )
+
+
+def _record_adaptive_success(scheduler: AdaptiveScheduler, stage: str) -> None:
+    stats = _adaptive_stage_stats(scheduler, stage)
+    stats.successes += 1
+    stats.consecutive_successes += 1
+    stats.consecutive_misses = 0
+    stats.consecutive_timeouts = 0
+
+
+def _record_adaptive_miss(scheduler: AdaptiveScheduler, stage: str) -> None:
+    stats = _adaptive_stage_stats(scheduler, stage)
+    stats.misses += 1
+    stats.consecutive_misses += 1
+    stats.consecutive_successes = 0
+    stats.consecutive_timeouts = 0
+
+
+def _record_adaptive_timeout(scheduler: AdaptiveScheduler, stage: str) -> None:
+    stats = _adaptive_stage_stats(scheduler, stage)
+    stats.timeouts += 1
+    stats.consecutive_timeouts += 1
+    stats.consecutive_misses += 1
+    stats.consecutive_successes = 0
+
+
+def _adaptive_scheduler_log(
+    round_index: int,
+    scheduler: AdaptiveScheduler,
+    order: Sequence[str],
+) -> str:
+    parts = [f"round {round_index} adaptive_order"]
+    for stage in order:
+        stats = _adaptive_stage_stats(scheduler, stage)
+        parts.append(
+            (
+                f"{stage}(score={_adaptive_stage_score(scheduler, stage)},"
+                f"successes={stats.successes},misses={stats.misses},"
+                f"timeouts={stats.timeouts},"
+                f"success_streak={stats.consecutive_successes},"
+                f"miss_streak={stats.consecutive_misses},"
+                f"timeout_streak={stats.consecutive_timeouts})"
+            )
+        )
+    return " ".join(parts)
 
 
 @dataclass
@@ -4440,13 +4562,20 @@ def reduce_pd_code(
                 ),
             )
 
+        adaptive_scheduler = AdaptiveScheduler()
+
         while (
             not output.stopped_by_crossing_limit
             and (reduction_round < 0 or output.mid_simplification_rounds < reduction_round)
         ):
             check_timeout(timeout, deadline)
             round_index = output.mid_simplification_rounds + 1
-            if max_paths == -1 and not ban_heuristic:
+            adaptive_mode = max_paths == -1 and not ban_heuristic
+            search = SimplificationResult()
+            restart_round = False
+
+            def run_r3_prepass() -> bool:
+                nonlocal restart_round
                 _emit_progress(
                     verbose,
                     progress,
@@ -4457,14 +4586,34 @@ def reduce_pd_code(
                         f"max_states={R3_PREPASS_MAX_STATES}"
                     ),
                 )
-                r3_prepass = find_reidemeister_iii_failover(
-                    output.code,
-                    output.crossingless_components,
-                    timeout=timeout,
-                    deadline=deadline,
-                    max_depth=R3_PREPASS_MAX_DEPTH,
-                    max_states=R3_PREPASS_MAX_STATES,
-                )
+                r3_prepass = ReidemeisterIIIFailoverResult()
+                stage_timeout = False
+                try:
+                    stage_timeout_value, stage_deadline = with_time_slice(
+                        timeout,
+                        deadline,
+                        R3_PREPASS_TIME_SLICE_SECONDS,
+                    )
+                    r3_prepass = find_reidemeister_iii_failover(
+                        output.code,
+                        output.crossingless_components,
+                        timeout=stage_timeout_value,
+                        deadline=stage_deadline,
+                        max_depth=R3_PREPASS_MAX_DEPTH,
+                        max_states=R3_PREPASS_MAX_STATES,
+                    )
+                except PdCodeSimplifyTimeoutError:
+                    if timeout_expired(deadline):
+                        raise
+                    stage_timeout = True
+                    _emit_progress(
+                        verbose,
+                        progress,
+                        (
+                            f"round {round_index} r3_prepass_timeout "
+                            f"seconds={R3_PREPASS_TIME_SLICE_SECONDS}"
+                        ),
+                    )
                 _emit_progress(
                     verbose,
                     progress,
@@ -4480,7 +4629,11 @@ def reduce_pd_code(
                         f"nugatory_moves={r3_prepass.nugatory_crossing_moves}"
                     ),
                 )
+                if stage_timeout:
+                    _record_adaptive_timeout(adaptive_scheduler, "r3_prepass")
+                    return False
                 if r3_prepass.found:
+                    _record_adaptive_success(adaptive_scheduler, "r3_prepass")
                     output.code = _canonical_output_code(r3_prepass.code)
                     output.crossingless_components = r3_prepass.crossingless_components
                     output.reidemeister_i_moves += r3_prepass.reidemeister_i_moves
@@ -4488,52 +4641,88 @@ def reduce_pd_code(
                     output.reidemeister_iii_moves += r3_prepass.reidemeister_iii_moves
                     output.nugatory_crossing_moves += r3_prepass.nugatory_crossing_moves
                     if stop_if_quit_at_crossing("r3_prepass"):
-                        break
-                    continue
+                        restart_round = True
+                        return True
+                    restart_round = True
+                    return True
+                _record_adaptive_miss(adaptive_scheduler, "r3_prepass")
+                return False
 
-            output.last_path_search_mode = _search_mode(max_paths, ban_heuristic)
-            _emit_progress(
-                verbose,
-                progress,
-                (
-                    f"round {round_index} search_start crossings={len(output.code)} "
-                    f"mode={output.last_path_search_mode} "
-                    f"max_thread={max_thread}"
-                ),
-            )
-            search = find_simplification(
-                output.code,
-                max_paths=max_paths,
-                ban_heuristic=ban_heuristic,
-                require_applicable=True,
-                max_thread=max_thread,
-                bruteforce_budget=bruteforce_budget,
-                verbose=verbose,
-                progress=progress,
-                timeout=timeout,
-                _timeout_deadline=deadline,
-            )
-            output.tested_red_paths += search.tested_red_paths
-            output.tested_green_paths += search.tested_green_paths
-            output.last_path_search_mode = search.path_search_mode
-            output.resource_limited = output.resource_limited or search.resource_limited
-            _emit_progress(
-                verbose,
-                progress,
-                (
-                    f"round {round_index} search_done found={'yes' if search.found else 'no'} "
-                    f"mode={search.path_search_mode} "
-                    f"tested_red={search.tested_red_paths} "
-                    f"tested_green={search.tested_green_paths} "
-                    f"resource_limited={'yes' if search.resource_limited else 'no'}"
-                ),
-            )
+            def run_heuristic_search() -> bool:
+                nonlocal search
+                output.last_path_search_mode = _search_mode(max_paths, ban_heuristic)
+                _emit_progress(
+                    verbose,
+                    progress,
+                    (
+                        f"round {round_index} search_start crossings={len(output.code)} "
+                        f"mode={output.last_path_search_mode} "
+                        f"max_thread={max_thread}"
+                    ),
+                )
+                stage_timeout = False
+                try:
+                    stage_timeout_value = timeout
+                    stage_deadline = deadline
+                    if adaptive_mode:
+                        stage_timeout_value, stage_deadline = with_time_slice(
+                            timeout,
+                            deadline,
+                            MID_SEARCH_TIME_SLICE_SECONDS,
+                        )
+                    search = find_simplification(
+                        output.code,
+                        max_paths=max_paths,
+                        ban_heuristic=ban_heuristic,
+                        require_applicable=True,
+                        max_thread=max_thread,
+                        bruteforce_budget=bruteforce_budget,
+                        verbose=verbose,
+                        progress=progress,
+                        timeout=stage_timeout_value,
+                        _timeout_deadline=stage_deadline,
+                    )
+                except PdCodeSimplifyTimeoutError:
+                    if not adaptive_mode or timeout_expired(deadline):
+                        raise
+                    stage_timeout = True
+                    search = SimplificationResult(
+                        path_search_mode=_search_mode(max_paths, ban_heuristic)
+                    )
+                    _emit_progress(
+                        verbose,
+                        progress,
+                        (
+                            f"round {round_index} search_timeout "
+                            f"seconds={MID_SEARCH_TIME_SLICE_SECONDS}"
+                        ),
+                    )
+                output.tested_red_paths += search.tested_red_paths
+                output.tested_green_paths += search.tested_green_paths
+                output.last_path_search_mode = search.path_search_mode
+                output.resource_limited = output.resource_limited or search.resource_limited
+                _emit_progress(
+                    verbose,
+                    progress,
+                    (
+                        f"round {round_index} search_done found={'yes' if search.found else 'no'} "
+                        f"mode={search.path_search_mode} "
+                        f"tested_red={search.tested_red_paths} "
+                        f"tested_green={search.tested_green_paths} "
+                        f"resource_limited={'yes' if search.resource_limited else 'no'}"
+                    ),
+                )
+                if adaptive_mode:
+                    if stage_timeout:
+                        _record_adaptive_timeout(adaptive_scheduler, "heuristic_search")
+                    elif search.found:
+                        _record_adaptive_success(adaptive_scheduler, "heuristic_search")
+                    else:
+                        _record_adaptive_miss(adaptive_scheduler, "heuristic_search")
+                return search.found
 
-            if (
-                not search.found
-                and max_paths == -1
-                and not ban_heuristic
-            ):
+            def run_non_monotone() -> bool:
+                nonlocal restart_round
                 _emit_progress(
                     verbose,
                     progress,
@@ -4546,14 +4735,34 @@ def reduce_pd_code(
                         f"max_total_green_tests={NON_MONOTONE_MAX_TOTAL_GREEN_TESTS}"
                     ),
                 )
-                non_monotone = find_non_monotone_reduction(
-                    output.code,
-                    output.crossingless_components,
-                    timeout=timeout,
-                    deadline=deadline,
-                    verbose=verbose,
-                    progress=progress,
-                )
+                non_monotone = NonMonotoneSearchResult()
+                stage_timeout = False
+                try:
+                    stage_timeout_value, stage_deadline = with_time_slice(
+                        timeout,
+                        deadline,
+                        NON_MONOTONE_TIME_SLICE_SECONDS,
+                    )
+                    non_monotone = find_non_monotone_reduction(
+                        output.code,
+                        output.crossingless_components,
+                        timeout=stage_timeout_value,
+                        deadline=stage_deadline,
+                        verbose=verbose,
+                        progress=progress,
+                    )
+                except PdCodeSimplifyTimeoutError:
+                    if timeout_expired(deadline):
+                        raise
+                    stage_timeout = True
+                    _emit_progress(
+                        verbose,
+                        progress,
+                        (
+                            f"round {round_index} non_monotone_timeout "
+                            f"seconds={NON_MONOTONE_TIME_SLICE_SECONDS}"
+                        ),
+                    )
                 output.tested_red_paths += non_monotone.tested_red_paths
                 output.tested_green_paths += non_monotone.tested_green_paths
                 _emit_progress(
@@ -4575,7 +4784,11 @@ def reduce_pd_code(
                         f"nugatory_moves={non_monotone.nugatory_crossing_moves}"
                     ),
                 )
+                if stage_timeout:
+                    _record_adaptive_timeout(adaptive_scheduler, "non_monotone")
+                    return False
                 if non_monotone.found:
+                    _record_adaptive_success(adaptive_scheduler, "non_monotone")
                     for step in non_monotone.steps:
                         if (
                             reduction_round >= 0
@@ -4615,10 +4828,36 @@ def reduce_pd_code(
                         )
                         if stop_if_quit_at_crossing("non_monotone"):
                             break
-                    if output.stopped_by_crossing_limit:
-                        break
-                    continue
+                    restart_round = True
+                    return True
+                _record_adaptive_miss(adaptive_scheduler, "non_monotone")
+                return False
 
+            if adaptive_mode:
+                stage_order = _adaptive_stage_order(adaptive_scheduler)
+                _emit_progress(
+                    verbose,
+                    progress,
+                    _adaptive_scheduler_log(round_index, adaptive_scheduler, stage_order),
+                )
+                for stage in stage_order:
+                    if stage == "r3_prepass":
+                        if run_r3_prepass():
+                            break
+                    elif stage == "heuristic_search":
+                        if run_heuristic_search():
+                            break
+                    else:
+                        if run_non_monotone():
+                            break
+                if output.stopped_by_crossing_limit:
+                    break
+                if restart_round:
+                    continue
+            else:
+                run_heuristic_search()
+
+            if not search.found and adaptive_mode:
                 output.last_path_search_mode = _search_mode(-1, True)
                 _emit_progress(
                     verbose,

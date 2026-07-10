@@ -53,9 +53,11 @@ application, and uses a fixed bounded lookahead before applying the best
 candidate. Use `ban_heuristic=True` to request exhaustive green-path
 enumeration for a manageable input. Use `reduction_round=K` to cap applied
 mid-simplification rounds; the default `-1` runs until stable. In default
-heuristic mode, a miss is followed by the native deterministic non-monotone
-failover, then a brute-force proof pass, then the RIII failover before the
-diagram is treated as stable. Use
+heuristic mode, the C++ backend adaptively orders `r3_prepass`,
+`heuristic_search`, and `non_monotone` from deterministic success, miss, and
+soft-timeout counters. If all adaptive stages miss, the backend runs a
+brute-force proof pass, then the RIII failover before the diagram is treated as
+stable. Use
 `timeout=K` to cap a call at `K` seconds; the default `-1` has no timeout. Use
 `verbose=True` to forward timestamped C++ progress logs to stderr. If a call
 times out, the returned dictionary still contains the best PD code found so far

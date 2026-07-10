@@ -29,10 +29,11 @@ python mid_simplify_v5.py --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 Use `--json` for structured output containing `final_pd_code` and
 `final_crossings`. Use `--reduction-round K` to cap applied
 mid-simplification rounds; the default `-1` runs until stable. In heuristic
-mode, a heuristic miss is followed by a deterministic non-monotone failover
-and then by a brute-force check before the current diagram is treated as
-stable. If either failover reduces the diagram, the next round returns to
-heuristic mode. Every generated PD code is canonicalized
+mode, each round adaptively orders `r3_prepass`, `heuristic_search`, and
+`non_monotone` from deterministic success, miss, and soft-timeout counters.
+If any adaptive stage reduces the diagram, the next round returns to the same
+adaptive loop. If all adaptive stages miss, a brute-force check runs before the
+current diagram is treated as stable. Every generated PD code is canonicalized
 immediately after it is produced, including after each local cleanup deletion
 and after every applied witness. Use `--timeout K` to cap each PD-code job at
 `K` seconds; the default `-1` has no timeout. A timed-out job returns the best
