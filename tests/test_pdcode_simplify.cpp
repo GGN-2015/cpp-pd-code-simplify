@@ -27,6 +27,27 @@ std::string read_text_file(const std::string& path) {
     return buffer.str();
 }
 
+bool env_flag_enabled(const char* name) {
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return false;
+    }
+    const std::string text(value);
+    return text == "1" || text == "true" || text == "TRUE" || text == "yes" || text == "YES";
+}
+
+int env_int_or_default(const char* name, int fallback) {
+    const char* value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return fallback;
+    }
+    try {
+        return std::stoi(value);
+    } catch (const std::exception&) {
+        return fallback;
+    }
+}
+
 void test_parser() {
     const auto code = pdcode_simplify::parse_pd_code("[(0, 1, 2, 3), (2, 3, 0, 1)]");
     require(code.size() == 2, "parser should create two crossings");
@@ -421,6 +442,56 @@ void test_reapr_pd_k0_fixture_rejects_unsafe_projection() {
             "REAPR oracle should report the determinant guard after value for a rejected candidate");
 }
 
+void test_optional_pd_k14_legacy_heuristic_regression() {
+    const auto code = pdcode_simplify::parse_pd_code(
+        read_text_file("tests/fixtures/pd_k14.txt"));
+    require(code.size() == 1456,
+            "pd_k14 regression fixture should start with 1456 crossings");
+
+    if (!env_flag_enabled("PDCODE_SIMPLIFY_RUN_PD_K14")) {
+        std::cout << "pd_k14 optional reduction skipped "
+                  << "(set PDCODE_SIMPLIFY_RUN_PD_K14=1 to run it)\n";
+        return;
+    }
+
+    const bool strict = env_flag_enabled("PDCODE_SIMPLIFY_STRICT_PD_K14");
+    try {
+        pdcode_simplify::SimplifierOptions options;
+        options.max_paths = -1;
+        options.ban_heuristic = false;
+        options.max_threads = env_int_or_default("PDCODE_SIMPLIFY_PD_K14_THREADS", 16);
+        options.bruteforce_budget = 200000;
+        options.quit_at_crossing = 14;
+        const int timeout_seconds = env_int_or_default("PDCODE_SIMPLIFY_PD_K14_TIMEOUT", -1);
+        if (timeout_seconds > 0) {
+            options.timeout_seconds = timeout_seconds;
+            options.has_timeout_deadline = true;
+            options.timeout_deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+        }
+
+        const auto reduced = pdcode_simplify::reduce_pd_code(code, 0, options, -1);
+        std::cout << "pd_k14 optional reduction result: crossings "
+                  << code.size() << " -> " << reduced.code.size()
+                  << ", rounds=" << reduced.mid_simplification_rounds
+                  << ", timed_out=" << (reduced.timed_out ? "yes" : "no")
+                  << ", resource_limited=" << (reduced.resource_limited ? "yes" : "no")
+                  << '\n';
+        if (strict) {
+            require(reduced.code.size() <= 14,
+                    "strict pd_k14 regression should reach at most 14 crossings");
+            require(reduced.stopped_by_crossing_limit,
+                    "strict pd_k14 regression should stop by the crossing limit");
+        }
+    } catch (const std::exception& error) {
+        if (strict) {
+            throw;
+        }
+        std::cout << "pd_k14 optional reduction did not complete: "
+                  << error.what() << '\n';
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -443,6 +514,7 @@ int main() {
         test_do_check_cycle_respects_timeout();
         test_step_pd_callback();
         test_reapr_pd_k0_fixture_rejects_unsafe_projection();
+        test_optional_pd_k14_legacy_heuristic_regression();
         std::cout << "All tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
