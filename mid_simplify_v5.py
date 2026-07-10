@@ -3886,8 +3886,7 @@ def _reapr_seed_for_attempt(attempt: int, determinant: int, crossings: int) -> i
 def _conservative_reapr_drop_limit(original_crossings: int) -> int:
     if original_crossings <= 0:
         return 0
-    percent_limit = (original_crossings + 19) // 20
-    return min(original_crossings, max(4, percent_limit))
+    return (original_crossings + 3) // 4
 
 
 def _conservative_reapr_min_crossings(original_crossings: int) -> int:
@@ -4019,6 +4018,7 @@ class ReaprOracleResult:
     determinant_after: str = ""
     invariants_before: str = ""
     invariants_after: str = ""
+    matched_step_codes: List[PDCode] = field(default_factory=list)
 
 
 def _crossingless_components_for_candidate(
@@ -4190,6 +4190,7 @@ def _try_reapr_oracle(
                 result.determinant_after,
                 result.invariants_after,
             )
+            result.matched_step_codes.append(_canonical_output_code(candidate))
             if len(cleaned_code) + 1 == len(code):
                 assert best_candidate is not None
                 result.accepted = True
@@ -4207,10 +4208,10 @@ def _try_reapr_oracle(
         result.crossingless_components = best_candidate[3]
         result.determinant_after = best_candidate[5]
         result.invariants_after = best_candidate[6]
-    elif saw_overaggressive_candidate:
-        result.status = "rejected_overaggressive_projection"
     elif saw_rejected_candidate:
         result.status = "rejected_invariant_changed"
+    elif saw_overaggressive_candidate:
+        result.status = "rejected_overaggressive_projection"
     elif saw_candidate:
         result.status = "rejected_no_matching_profile"
     else:
@@ -4311,7 +4312,11 @@ def reduce_pd_code(
                 output.reapr_warning = REAPR_WARNING
                 output.code = _canonical_output_code(reapr_result.code)
                 output.crossingless_components = reapr_result.crossingless_components
-                _emit_step_pd(show_step_pd, step_pd_output, 0, output.code)
+                if reapr_result.matched_step_codes:
+                    for step_code in reapr_result.matched_step_codes:
+                        _emit_step_pd(show_step_pd, step_pd_output, 0, step_code)
+                else:
+                    _emit_step_pd(show_step_pd, step_pd_output, 0, output.code)
                 check_timeout(timeout, deadline)
                 prepared = simplify_pd_code(output.code, output.crossingless_components, timeout, deadline)
                 output.code = _canonical_output_code(prepared.code)

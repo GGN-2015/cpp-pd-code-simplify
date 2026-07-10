@@ -284,7 +284,7 @@ candidate only when it can make the crossing count smaller. The acceptance
 policy is deliberately conservative: for a diagram with `n` crossings, a REAPR
 candidate is considered only if both the raw candidate and the candidate after
 ordinary R1/R2/nugatory cleanup still have at least
-`n - max(4, ceil(n / 20))` crossings. This prevents the oracle from accepting
+`n - ceil(n / 4)` crossings. This prevents the oracle from accepting
 an extremely small projection just because the current invariant profile is too
 coarse to reject it.
 

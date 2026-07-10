@@ -3203,8 +3203,7 @@ int conservative_reapr_drop_limit(int original_crossings) {
     if (original_crossings <= 0) {
         return 0;
     }
-    const int percent_limit = (original_crossings + 19) / 20;
-    return std::min(original_crossings, std::max(4, percent_limit));
+    return (original_crossings + 3) / 4;
 }
 
 int conservative_reapr_min_crossings(int original_crossings) {
@@ -3363,6 +3362,7 @@ struct ReaprOracleResult {
     std::string determinant_after;
     std::string invariants_before;
     std::string invariants_after;
+    std::vector<PDCode> matched_step_codes;
 };
 
 std::size_t crossingless_components_for_candidate(
@@ -3577,6 +3577,7 @@ ReaprOracleResult try_reapr_oracle(
                 accepted_status,
                 result.determinant_after,
                 result.invariants_after);
+            result.matched_step_codes.push_back(canonical_output_code(candidate));
             {
                 std::ostringstream message;
                 message << "reapr_attempt_matched attempt=" << (attempt + 1)
@@ -3604,10 +3605,10 @@ ReaprOracleResult try_reapr_oracle(
         result.crossingless_components = best_candidate.crossingless_components;
         result.determinant_after = best_candidate.determinant_after;
         result.invariants_after = best_candidate.invariants_after;
-    } else if (saw_overaggressive_candidate) {
-        result.status = "rejected_overaggressive_projection";
     } else if (saw_rejected_candidate) {
         result.status = "rejected_invariant_changed";
+    } else if (saw_overaggressive_candidate) {
+        result.status = "rejected_overaggressive_projection";
     } else if (saw_candidate) {
         result.status = "rejected_no_matching_profile";
     } else {
@@ -5115,7 +5116,13 @@ inline ReductionResult reduce_pd_code(
                 output.reapr_warning = kReaprWarning;
                 output.code = canonical_output_code(reapr.code);
                 output.crossingless_components = reapr.crossingless_components;
-                emit_step_pd(run_options, 0, output.code);
+                if (reapr.matched_step_codes.empty()) {
+                    emit_step_pd(run_options, 0, output.code);
+                } else {
+                    for (const PDCode& step_code : reapr.matched_step_codes) {
+                        emit_step_pd(run_options, 0, step_code);
+                    }
+                }
                 check_timeout(run_options);
                 const PDSimplificationResult reapr_cleanup =
                     simplify_pd_code_checked(output.code, output.crossingless_components, &run_options);

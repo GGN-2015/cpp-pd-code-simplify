@@ -52,14 +52,17 @@ lexicographically.
 
 Use `--show-step-pd` to print `step_pd_code[ROUND]: PD[...]` to stdout after
 each mid-simplification witness is applied and canonicalized, before that
-round's automatic local cleanup. This diagnostic output is disabled by default
-because it can be large and shares stdout with JSON/text results.
+round's automatic local cleanup. With `--reapr`, every REAPR candidate that
+passes the full invariant profile and conservative crossing window is also
+printed with round `0` before the selected candidate's ordinary local cleanup.
+This diagnostic output is disabled by default because it can be large and
+shares stdout with JSON/text results.
 Use `--reapr` to enable the same experimental invariant-guarded projection
 oracle as the C++ implementation. It checks component count, Alexander
 determinant, Goeritz signature, and Alexander roots over `F_11`, `F_19`, and
 `F_31` before accepting a candidate. The oracle is conservative: for `n`
 current crossings, the raw candidate and its R1/R2/nugatory cleanup must both
-keep at least `n - max(4, ceil(n / 20))` crossings, and accepted candidates
+keep at least `n - ceil(n / 4)` crossings, and accepted candidates
 return to the normal iterative simplification loop. It is disabled by default
 and can still change the knot or link type; output includes `reapr_warning`
 when the oracle is used. Use `--reapr-retry-max N` to cap the deterministic
@@ -99,8 +102,8 @@ current best result with `result.timed_out == True`.
 If `reduce_pd_code(..., bruteforce_budget=N)` exhausts its brute-force budget,
 it returns the current best result with `result.resource_limited == True`.
 Pass `show_step_pd=True` to `reduce_pd_code` to print each post-witness PD
-code, or pass `step_pd_output=callable` to receive `(round_index, code)` in
-Python code.
+code and each accepted REAPR candidate, or pass `step_pd_output=callable` to
+receive `(round_index, code)` in Python code.
 Pass `reapr=True` only for experimental invariant-guarded projection
 candidates; verify independent invariants when it is used. Pass
 `reapr_retry_max=N` to control the deterministic retry cap.

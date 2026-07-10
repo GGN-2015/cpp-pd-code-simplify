@@ -101,7 +101,7 @@ component.
 --reapr-retry-max N            Maximum deterministic REAPR attempts; default 3.
 --timeout K                    Per-PD-code timeout in seconds; -1 means no timeout.
 --verbose                      Print timestamped progress logs to stderr.
---show-step-pd                 Print each post-witness PD code to stdout.
+--show-step-pd                 Print post-witness and accepted REAPR PD codes to stdout.
 --log-file FILEPATH            Tee stdout and stderr output into a flushed log file.
 --known-crossingless-components N
                                Add N components not representable in PD code.
@@ -147,7 +147,7 @@ R1/R2/nugatory preprocessing and before the mid-simplification search. The
 oracle accepts a candidate only when it has fewer crossings and the internal
 invariant profile is unchanged. It also uses a conservative step window: for
 `n` current crossings, the raw candidate and its R1/R2/nugatory cleanup must
-both keep at least `n - max(4, ceil(n / 20))` crossings. Accepted candidates
+both keep at least `n - ceil(n / 4)` crossings. Accepted candidates
 return to the normal iterative simplification loop. The profile includes total
 component count, Alexander determinant, Goeritz signature, and Alexander roots
 over `F_11`, `F_19`, and `F_31`. This guard is stricter than determinant
@@ -167,10 +167,12 @@ output include `timed_out`; in batch mode, later jobs continue. Pressing
 
 `--show-step-pd` prints `step_pd_code[ROUND]: PD[...]` immediately after each
 mid-simplification witness is applied and canonicalized, before the automatic
-local cleanup for that round. In batch mode the line is prefixed with
-the input label. This diagnostic output uses stdout and is therefore
-intentionally off by default, especially when `--json` output will be parsed
-by another program.
+local cleanup for that round. When `--reapr` is enabled, every REAPR candidate
+that passes the full invariant profile and conservative crossing window is also
+printed with round `0` before the selected candidate's ordinary local cleanup.
+In batch mode the line is prefixed with the input label. This diagnostic output
+uses stdout and is therefore intentionally off by default, especially when
+`--json` output will be parsed by another program.
 
 `--log-file FILEPATH` tees everything written to stdout and stderr into the
 given file and flushes that file after each write. The normal terminal output
