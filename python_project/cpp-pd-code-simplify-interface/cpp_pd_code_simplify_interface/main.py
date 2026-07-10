@@ -227,7 +227,6 @@ def _pd_file_jobs(path: str) -> list[tuple[str, str]]:
 def _resource_paths():
     package = "cpp_pd_code_simplify_interface"
     resource_names = [
-        resources.files(package) / "data" / "src" / "pdcode_simplify.cpp",
         resources.files(package) / "data" / "src" / "native_interface.cpp",
         resources.files(package) / "data" / "include" / "pdcode_simplify" / "pdcode_simplify.hpp",
     ]
@@ -253,7 +252,6 @@ def _resource_paths():
 
     current = pathlib.Path(__file__).resolve()
     for parent in current.parents:
-        candidate_cpp = parent / "src" / "pdcode_simplify.cpp"
         candidate_wrapper = (
             parent
             / "python_project"
@@ -264,8 +262,8 @@ def _resource_paths():
             / "native_interface.cpp"
         )
         candidate_header = parent / "include" / "pdcode_simplify" / "pdcode_simplify.hpp"
-        if candidate_cpp.exists() and candidate_wrapper.exists() and candidate_header.exists():
-            yield [candidate_cpp, candidate_wrapper, candidate_header]
+        if candidate_wrapper.exists() and candidate_header.exists():
+            yield [candidate_wrapper, candidate_header]
             return
 
     raise PdCodeSimplifyInterfaceError(
@@ -775,9 +773,9 @@ def compile_simplifier(
         cpp_simple_interface.set_gpp_filepath(cxx)
 
     with _resource_paths() as paths:
-        pd_source, wrapper_source, header = paths
+        wrapper_source, header = paths
         include_dir = header.parents[1]
-        source_bytes = pd_source.read_bytes() + b"\0" + wrapper_source.read_bytes() + b"\0" + header.read_bytes()
+        source_bytes = wrapper_source.read_bytes() + b"\0" + header.read_bytes()
 
         cache = _cache_dir()
         placeholder = cache / ("pdcode-simplify-placeholder" + _library_suffix())
@@ -798,14 +796,14 @@ def compile_simplifier(
             tmp_library.unlink()
 
         success, message = cpp_simple_interface.compile_cpp_files(
-            [str(pd_source), str(wrapper_source)],
+            [str(wrapper_source)],
             str(tmp_library),
             other_flags=flags,
         )
         if not success and "-march=native" in flags:
             fallback_flags = [flag for flag in flags if flag != "-march=native"]
             success, message = cpp_simple_interface.compile_cpp_files(
-                [str(pd_source), str(wrapper_source)],
+                [str(wrapper_source)],
                 str(tmp_library),
                 other_flags=fallback_flags,
             )
@@ -877,6 +875,7 @@ def _load_library() -> ctypes.CDLL:
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_int,
+        ctypes.c_int,
         ctypes.c_longlong,
         ctypes.c_int,
         ctypes.c_int,
@@ -906,6 +905,7 @@ def _run_one_direct(
     timeout: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
+    reapr: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
     log_file: Optional[Union[str, os.PathLike[str]]] = None,
@@ -935,6 +935,7 @@ def _run_one_direct(
         int(timeout),
         1 if verbose else 0,
         1 if show_step_pd else 0,
+        1 if reapr else 0,
         int(known_crossingless_components),
         removed_array,
         int(removed_count),
@@ -978,6 +979,7 @@ def _run_one(
     timeout: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
+    reapr: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
     log_file: Optional[Union[str, os.PathLike[str]]] = None,
@@ -1001,6 +1003,7 @@ def _run_one(
         "timeout": int(timeout),
         "verbose": bool(verbose),
         "show_step_pd": bool(show_step_pd),
+        "reapr": bool(reapr),
         "known_crossingless_components": int(known_crossingless_components),
         "remove_crossings": [int(value) for value in remove_crossings or []],
     }
@@ -1084,6 +1087,7 @@ def simplify(
     timeout: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
+    reapr: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
     log_file: Optional[Union[str, os.PathLike[str]]] = None,
@@ -1102,6 +1106,7 @@ def simplify(
             timeout=timeout,
             verbose=verbose,
             show_step_pd=show_step_pd,
+            reapr=reapr,
             known_crossingless_components=known_crossingless_components,
             remove_crossings=remove_crossings,
             log_file=log_file,
@@ -1119,6 +1124,7 @@ def simplify_many(
     timeout: int = -1,
     verbose: bool = False,
     show_step_pd: bool = False,
+    reapr: bool = False,
     known_crossingless_components: int = 0,
     remove_crossings: Optional[Sequence[int]] = None,
     log_file: Optional[Union[str, os.PathLike[str]]] = None,
@@ -1138,6 +1144,7 @@ def simplify_many(
                 timeout=timeout,
                 verbose=verbose,
                 show_step_pd=show_step_pd,
+                reapr=reapr,
                 known_crossingless_components=known_crossingless_components,
                 remove_crossings=remove_crossings,
                 log_file=log_file,
@@ -1170,6 +1177,11 @@ def _main_impl(argv: Sequence[str]) -> int:
     parser.add_argument("--timeout", type=int, default=-1)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--show-step-pd", action="store_true")
+    parser.add_argument(
+        "--reapr",
+        action="store_true",
+        help="enable the experimental determinant-guarded projection oracle",
+    )
     parser.add_argument("--log-file", help="tee stdout and stderr output into this flushed log file")
     parser.add_argument("--known-crossingless-components", type=int, default=0)
     parser.add_argument("--remove-crossings", help="comma-separated zero-based crossing indices")
@@ -1217,6 +1229,7 @@ def _main_impl(argv: Sequence[str]) -> int:
                     timeout=args.timeout,
                     verbose=args.verbose,
                     show_step_pd=args.show_step_pd,
+                    reapr=args.reapr,
                     known_crossingless_components=args.known_crossingless_components,
                     remove_crossings=remove_crossings,
                     log_file=args.log_file,
@@ -1253,6 +1266,7 @@ def _main_impl(argv: Sequence[str]) -> int:
                 timeout=args.timeout,
                 verbose=args.verbose,
                 show_step_pd=args.show_step_pd,
+                reapr=args.reapr,
                 known_crossingless_components=args.known_crossingless_components,
                 remove_crossings=remove_crossings,
                 log_file=args.log_file,

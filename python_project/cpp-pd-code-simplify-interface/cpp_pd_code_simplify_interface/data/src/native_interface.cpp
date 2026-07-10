@@ -141,7 +141,8 @@ std::string result_to_json(
         result.reidemeister_i_moves > 0 ||
         result.reidemeister_ii_moves > 0 ||
         result.reidemeister_iii_moves > 0 ||
-        result.nugatory_crossing_moves > 0;
+        result.nugatory_crossing_moves > 0 ||
+        result.reapr_used;
     std::ostringstream out;
     out << "{";
     out << "\"simplification_found\":"
@@ -169,6 +170,15 @@ std::string result_to_json(
     out << "\"tested_red_paths\":" << result.tested_red_paths << ",";
     out << "\"tested_green_paths\":" << result.tested_green_paths << ",";
     out << "\"last_path_search_mode\":\"" << json_escape(result.last_path_search_mode) << "\",";
+    out << "\"reapr_used\":" << (result.reapr_used ? "true" : "false") << ",";
+    out << "\"reapr_rounds\":" << result.reapr_rounds << ",";
+    out << "\"reapr_rejected\":" << (result.reapr_rejected ? "true" : "false") << ",";
+    out << "\"reapr_status\":\"" << json_escape(result.reapr_status) << "\",";
+    out << "\"reapr_warning\":\"" << json_escape(result.reapr_warning) << "\",";
+    out << "\"alexander_determinant_before\":\""
+        << json_escape(result.alexander_determinant_before) << "\",";
+    out << "\"alexander_determinant_after\":\""
+        << json_escape(result.alexander_determinant_after) << "\",";
     out << "\"stopped_by_round_limit\":"
         << (result.stopped_by_round_limit ? "true" : "false") << ",";
     out << "\"timed_out\":" << (result.timed_out ? "true" : "false") << ",";
@@ -203,6 +213,7 @@ char* pdcode_simplify_run_json(
     int timeout_seconds,
     int verbose,
     int show_step_pd,
+    int enable_reapr,
     unsigned long long known_crossingless_components,
     const int* removed_crossings,
     unsigned long long removed_crossing_count,
@@ -239,6 +250,7 @@ char* pdcode_simplify_run_json(
         options.bruteforce_budget = bruteforce_budget;
         options.timeout_seconds = timeout_seconds;
         options.ban_heuristic = ban_heuristic != 0;
+        options.enable_reapr = enable_reapr != 0;
         options.verbose = verbose != 0;
         options.progress = [](const std::string& message) {
             print_progress_log(message);

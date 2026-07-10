@@ -20,11 +20,6 @@ REPO_ROOT = PROJECT_ROOT.parents[1]
 
 EMBEDDED_SOURCE_FILES = [
     (
-        REPO_ROOT / "src" / "pdcode_simplify.cpp",
-        PROJECT_ROOT / "cpp_pd_code_simplify_interface" / "data" / "src" / "pdcode_simplify.cpp",
-        "cpp_pd_code_simplify_interface/data/src/pdcode_simplify.cpp",
-    ),
-    (
         REPO_ROOT / "include" / "pdcode_simplify" / "pdcode_simplify.hpp",
         PROJECT_ROOT
         / "cpp_pd_code_simplify_interface"

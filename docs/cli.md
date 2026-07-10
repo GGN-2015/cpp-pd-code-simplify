@@ -97,6 +97,7 @@ component.
 --reduction-round K            Maximum mid-simplification rounds; -1 means until stable.
 --max-thread N                 Maximum brute-force worker threads; -1 means auto.
 --bruteforce-budget N          Cap brute-force green-path checks; default 200000, -1 means no cap.
+--reapr                        Enable the experimental determinant-guarded projection oracle.
 --timeout K                    Per-PD-code timeout in seconds; -1 means no timeout.
 --verbose                      Print timestamped progress logs to stderr.
 --show-step-pd                 Print each post-witness PD code to stdout.
@@ -138,6 +139,16 @@ Verbose log lines are prefixed with local wall-clock time in
 `YYYY-MM-DD HH:MM:SS` format. When `--max-thread -1` reaches a brute-force
 search phase, verbose logs also include `actual_threads`, the worker count
 selected for that phase.
+
+`--reapr` is disabled by default. When enabled, the executable tries an
+experimental deterministic reembedding/projection oracle after the default
+R1/R2/nugatory preprocessing and before the mid-simplification search. The
+oracle accepts a candidate only when it has fewer crossings and the internal
+Alexander determinant fingerprint is unchanged. This guard is intentionally
+cheap, but it is not a proof that the output is the same knot or link. Output
+therefore includes `reapr_used`, `reapr_status`, `reapr_warning`,
+`alexander_determinant_before`, and `alexander_determinant_after`. Treat any
+`--reapr` result as a candidate that needs independent invariant checks.
 
 `--timeout -1` is the default and disables time limits. `--timeout K`, where
 `K` is a positive integer, stops the current PD-code job after approximately

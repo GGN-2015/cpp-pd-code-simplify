@@ -265,6 +265,41 @@ backend, so it inherits the same move ordering and the same output. If the
 failover lowers the crossing count, the main simplification loop starts over
 from heuristic witness search on the new canonical PD code.
 
+## Experimental REAPR Oracle
+
+`--reapr` enables an experimental deterministic oracle that is intentionally
+outside the strict correctness proof for the default simplifier. It is meant
+for hard diagrams where the certified red-green witness search cannot make
+progress, and it is disabled by default.
+
+The internal implementation does not call REAPR, Knoodle, SnapPy, or
+`pd-code-to-diagram`. It computes a cheap Alexander determinant fingerprint
+from a Fox coloring matrix over several fixed prime fields. The determinant
+code is isolated in the C++ namespace `alexander_determinant_guard`, with the
+Python prototype using the same matrix construction and the same primes.
+
+For a one-component input, the oracle tries a deterministic projection
+candidate only when it can make the crossing count smaller:
+
+- determinant `1` proposes the empty unknot projection;
+- an odd determinant `d > 1` proposes the canonical `(2,d)` torus-knot
+  projection template, but only when `d` is below the current crossing count.
+
+The candidate is canonicalized through the same final PD formatter used by the
+rest of the project. It is accepted only if its Alexander determinant
+fingerprint exactly matches the original fingerprint. Accepted results then
+run through the ordinary R1/R2/nugatory cleanup and continue into the normal
+reduction loop.
+
+This guard is deliberately weak: equality of the Alexander determinant does
+not prove that two knots or links are equivalent. The output therefore carries
+`reapr_warning`, `reapr_status`, `alexander_determinant_before`, and
+`alexander_determinant_after`. Users who enable `--reapr` must verify stronger
+invariants independently, for example with Khovanov homology. The project
+tests include a `pd_k0.txt` regression fixture where the C++ implementation
+with `--reapr` must reduce the crossing count below the original 481 crossings,
+but that test only checks the oracle path and determinant guard behavior.
+
 ## Component Accounting
 
 Plain PD codes cannot represent components with no crossings. This matters
@@ -336,6 +371,10 @@ arcs of a triangular face according to the standard Reidemeister-III local
 move. It preserves the crossing count and link type. The subsequent R1, R2,
 and nugatory deletions are local Reidemeister or nugatory simplifications, and
 the same half-edge pairing checks used elsewhere reject invalid rewrites.
+
+The experimental `--reapr` oracle is not covered by this soundness argument.
+Its determinant guard is a screening check, not an equivalence proof. This is
+why the option is opt-in and why accepted output carries an explicit warning.
 
 The component accounting is correct because a component is represented by
 the set of crossings visited while walking `next` along that component.

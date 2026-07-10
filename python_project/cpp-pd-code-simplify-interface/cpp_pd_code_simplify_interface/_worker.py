@@ -21,6 +21,7 @@ def main() -> int:
             timeout=int(request.get("timeout", -1)),
             verbose=bool(request.get("verbose", False)),
             show_step_pd=bool(request.get("show_step_pd", False)),
+            reapr=bool(request.get("reapr", False)),
             known_crossingless_components=int(
                 request.get("known_crossingless_components", 0)
             ),

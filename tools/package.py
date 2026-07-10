@@ -113,7 +113,6 @@ def build_executable(args: argparse.Namespace) -> Path:
             [
                 cxx,
                 *common_flags(args.config, msvc),
-                "src\\pdcode_simplify.cpp",
                 "src\\main.cpp",
                 f"/Fe:{output}",
             ]
@@ -123,7 +122,6 @@ def build_executable(args: argparse.Namespace) -> Path:
             [
                 cxx,
                 *common_flags(args.config, msvc),
-                "src/pdcode_simplify.cpp",
                 "src/main.cpp",
                 "-o",
                 str(output),
@@ -145,7 +143,6 @@ def build_tests(args: argparse.Namespace) -> Path:
             [
                 cxx,
                 *common_flags(args.config, msvc),
-                "src\\pdcode_simplify.cpp",
                 "tests\\test_pdcode_simplify.cpp",
                 f"/Fe:{output}",
             ]
@@ -155,7 +152,6 @@ def build_tests(args: argparse.Namespace) -> Path:
             [
                 cxx,
                 *common_flags(args.config, msvc),
-                "src/pdcode_simplify.cpp",
                 "tests/test_pdcode_simplify.cpp",
                 "-o",
                 str(output),

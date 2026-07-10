@@ -9,10 +9,10 @@ The package is designed for PyPI distribution:
 pip install cpp-pd-code-simplify-interface
 ```
 
-It ships the C++ source code inside the wheel and source distribution. On first
-use, the package compiles a cached local dynamic library through
-`cpp-simple-interface`; later calls reuse that library through `ctypes`. A C++17
-compiler compatible with `g++` must be available at runtime.
+It ships the header-only C++ core and native C wrapper inside the wheel and
+source distribution. On first use, the package compiles a cached local dynamic
+library through `cpp-simple-interface`; later calls reuse that library through
+`ctypes`. A C++17 compiler compatible with `g++` must be available at runtime.
 
 Runtime dependencies are handled per platform. On Windows, the interface uses
 `objdump -p` or `dumpbin /DEPENDENTS` when available, then caches MinGW runtime
@@ -21,10 +21,10 @@ next to the generated DLL. On Linux it adds `$ORIGIN` rpath and can inspect
 `ldd`; on macOS it adds `@loader_path` rpath and can inspect `otool -L`. Load
 failures are wrapped with platform-specific dependency hints.
 
-The core C++ source and header are not stored as permanent generated copies in
-this subproject. The custom Poetry build backend syncs them from the repository
-root during `poetry build`, embeds them in the wheel and sdist, then removes the
-temporary copies from the working tree.
+The core C++ header is not stored as a permanent generated copy in this
+subproject. The custom Poetry build backend syncs it from the repository root
+during `poetry build`, embeds it in the wheel and sdist beside the native C
+wrapper, then removes the temporary copy from the working tree.
 
 Calls use the C++ library's default preprocessing pipeline: R1-move removal,
 true R2-bigon removal, and nugatory-crossing removal, then iterative
@@ -67,6 +67,9 @@ the C++ backend for that phase. The backend call runs in a helper process, so
 `Ctrl+C` can terminate active C++ work and its worker threads cleanly. Use
 `log_file=PATH`, or CLI flag `--log-file PATH`, to tee stdout and stderr into a
 flushed backup log file.
+Use `reapr=True`, or CLI flag `--reapr`, only for the experimental
+determinant-guarded projection oracle. It can change the knot or link type;
+accepted output includes `reapr_warning` and determinant guard fields.
 Use `show_step_pd=True`, or CLI flag `--show-step-pd`, to print
 `step_pd_code[ROUND]: PD[...]` to stdout after each mid-simplification witness
 is applied and canonicalized, before that round's automatic local cleanup.

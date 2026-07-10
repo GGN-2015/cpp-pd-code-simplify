@@ -393,6 +393,27 @@ void test_step_pd_callback() {
             "step callback should receive a canonical PD code after witness application");
 }
 
+void test_reapr_pd_k0_fixture_reduces() {
+    const auto code = pdcode_simplify::parse_pd_code(
+        read_text_file("tests/fixtures/pd_k0.txt"));
+    require(code.size() == 481,
+            "pd_k0 regression fixture should start with 481 crossings");
+
+    pdcode_simplify::SimplifierOptions options;
+    options.enable_reapr = true;
+    options.max_threads = 1;
+    const auto reduced = pdcode_simplify::reduce_pd_code(code, 0, options, 0);
+
+    require(reduced.reapr_used,
+            "pd_k0 regression fixture should accept the experimental REAPR oracle");
+    require(reduced.code.size() < code.size(),
+            "experimental REAPR oracle should reduce the pd_k0 crossing count");
+    require(!reduced.alexander_determinant_before.empty(),
+            "REAPR oracle should report the determinant guard before value");
+    require(reduced.alexander_determinant_before == reduced.alexander_determinant_after,
+            "REAPR oracle should accept only determinant-preserving candidates");
+}
+
 }  // namespace
 
 int main() {
@@ -414,6 +435,7 @@ int main() {
         test_canonicalize_after_each_reduction();
         test_do_check_cycle_respects_timeout();
         test_step_pd_callback();
+        test_reapr_pd_k0_fixture_reduces();
         std::cout << "All tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

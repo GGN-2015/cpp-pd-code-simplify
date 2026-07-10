@@ -25,6 +25,7 @@ DEFAULT_ZIP = ROOT / "tests" / "pd_code.zip"
 DEFAULT_CSV = ROOT / "docs" / "assets" / "cpp_zip_random_30_time_scatter.csv"
 DEFAULT_JSON = ROOT / "docs" / "assets" / "cpp_zip_random_30_time_scatter.json"
 DEFAULT_PNG = ROOT / "docs" / "assets" / "cpp_zip_random_30_time_scatter.png"
+DEFAULT_REDUCTION_PNG = ROOT / "docs" / "assets" / "cpp_zip_random_30_crossing_reduction_scatter.png"
 DEFAULT_MARKDOWN = ROOT / "docs" / "cpp-time-analysis.md"
 DEFAULT_SEED = 20260709
 
@@ -291,6 +292,55 @@ def make_plot(rows: Sequence[Mapping[str, object]], png_path: Path) -> None:
     plt.close(fig)
 
 
+def make_crossing_reduction_plot(rows: Sequence[Mapping[str, object]], png_path: Path) -> None:
+    import matplotlib.pyplot as plt
+
+    ok_rows = [row for row in rows if row.get("status") == "ok"]
+    summary = summary_for_rows(rows)
+
+    plt.style.use("classic")
+    fig, ax = plt.subplots(figsize=(8.5, 5.4), dpi=160)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    if ok_rows:
+        x_values = [float(row["crossings"]) for row in ok_rows]
+        y_values = [float(row["final_crossings"]) for row in ok_rows]
+        ax.scatter(
+            x_values,
+            y_values,
+            s=38,
+            c="#2ca02c",
+            alpha=0.84,
+            edgecolors="white",
+            linewidths=0.45,
+            label="completed",
+        )
+        x_padding = max(5.0, (max(x_values) - min(x_values)) * 0.05)
+        ax.set_xlim(min(x_values) - x_padding, max(x_values) + x_padding)
+        ax.set_ylim(-0.8, max(12.0, max(y_values) + 1.0))
+
+    ax.set_title("C++ PD-Code Output Crossing Counts on Completed Zip-Random Samples", pad=12)
+    ax.set_xlabel("Input crossing count")
+    ax.set_ylabel("Final output crossing count")
+    ax.grid(True, color="#d9d9d9", linewidth=0.8, alpha=0.8)
+    failure_rate = float(summary.get("failure_rate_percent", 0.0))
+    ax.text(
+        0.02,
+        0.98,
+        f"completed: {summary.get('completed_count', 0)}/{summary.get('sample_count', 0)}\n"
+        f"failure rate: {failure_rate:.1f}%",
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "edgecolor": "#c8c8c8", "alpha": 0.92},
+    )
+    fig.tight_layout()
+    png_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(png_path)
+    plt.close(fig)
+
+
 def summary_for_rows(rows: Sequence[Mapping[str, object]]) -> Dict[str, object]:
     completed = [row for row in rows if row.get("status") == "ok"]
     times = numeric_values(completed, "time_seconds")
@@ -327,6 +377,7 @@ def write_markdown(
     csv_path: Path,
     json_path: Path,
     png_path: Path,
+    reduction_png_path: Path,
     rows: Sequence[Mapping[str, object]],
     args: argparse.Namespace,
 ) -> None:
@@ -334,6 +385,7 @@ def write_markdown(
     relative_csv = csv_path.relative_to(markdown_path.parent).as_posix()
     relative_json = json_path.relative_to(markdown_path.parent).as_posix()
     relative_png = png_path.relative_to(markdown_path.parent).as_posix()
+    relative_reduction_png = reduction_png_path.relative_to(markdown_path.parent).as_posix()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     lines = [
@@ -355,7 +407,17 @@ def write_markdown(
         "",
         "## Results",
         "",
+        "### Runtime",
+        "",
         f"![C++ zip-random time scatter]({relative_png})",
+        "",
+        "### Crossing Reduction",
+        "",
+        "The second scatter plot uses the original input crossing count as the",
+        "horizontal axis and the final crossing count reported by the completed",
+        "algorithm run as the vertical axis.",
+        "",
+        f"![C++ zip-random final crossing scatter]({relative_reduction_png})",
         "",
         "| Metric | Value |",
         "| --- | ---: |",
@@ -419,6 +481,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--csv", type=Path, default=DEFAULT_CSV)
     parser.add_argument("--json", type=Path, default=DEFAULT_JSON)
     parser.add_argument("--png", type=Path, default=DEFAULT_PNG)
+    parser.add_argument("--reduction-png", type=Path, default=DEFAULT_REDUCTION_PNG)
     parser.add_argument("--markdown", type=Path, default=DEFAULT_MARKDOWN)
     parser.add_argument("--force", action="store_true", help="rerun rows already present in the CSV output")
     return parser.parse_args()
@@ -486,10 +549,12 @@ def main() -> int:
 
     write_csv(args.csv, rows)
     make_plot(rows, args.png)
+    make_crossing_reduction_plot(rows, args.reduction_png)
     write_json(args.json, build_payload(rows, args))
-    write_markdown(args.markdown, args.csv, args.json, args.png, rows, args)
+    write_markdown(args.markdown, args.csv, args.json, args.png, args.reduction_png, rows, args)
     print(f"Wrote {args.csv}", flush=True)
     print(f"Wrote {args.png}", flush=True)
+    print(f"Wrote {args.reduction_png}", flush=True)
     print(f"Wrote {args.markdown}", flush=True)
     return 0
 

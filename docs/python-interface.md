@@ -4,15 +4,15 @@ The `python_project/cpp-pd-code-simplify-interface` subproject is a PyPI-ready
 Python package named `cpp-pd-code-simplify-interface`.
 
 It follows the same source-embedding pattern as `cppkh-interface`: built
-distributions include the C++ source files, and the package compiles a cached
-local dynamic library on first use through `cpp-simple-interface`. Python calls
-that library through `ctypes`.
+distributions include the header-only C++ core plus the native C wrapper, and
+the package compiles a cached local dynamic library on first use through
+`cpp-simple-interface`. Python calls that library through `ctypes`.
 
-The repository does not keep generated copies of the core C++ implementation
-inside the Python package tree. The custom Poetry build backend temporarily
-copies the current `src/pdcode_simplify.cpp` and public header into the package
-data directory, injects those files into the wheel and sdist, and then removes
-the temporary copies from the working tree.
+The repository does not keep generated copies of the core C++ header inside
+the Python package tree. The custom Poetry build backend temporarily copies the
+current public header into the package data directory, injects it into the
+wheel and sdist beside `native_interface.cpp`, and then removes the temporary
+copy from the working tree.
 
 The interface uses the C++ library's default preprocessing pipeline: R1-move
 removal, true R2-bigon removal, and nugatory-crossing removal before the
@@ -97,6 +97,11 @@ backend in a helper process, so `Ctrl+C` can terminate active C++ work and its
 worker threads cleanly before the Python process exits. Pass `log_file=PATH`,
 or use CLI flag `--log-file PATH`, to tee stdout and stderr output into a
 flushed backup log file.
+
+Pass `reapr=True`, or use CLI flag `--reapr`, to enable the experimental
+determinant-guarded projection oracle in the native backend. It is disabled by
+default and can change the knot or link type; accepted output includes
+`reapr_warning` and determinant guard fields for independent checking.
 
 Pass `show_step_pd=True`, or use CLI flag `--show-step-pd`, to print
 `step_pd_code[ROUND]: PD[...]` to stdout after each mid-simplification witness

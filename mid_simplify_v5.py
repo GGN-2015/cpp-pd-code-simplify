@@ -130,6 +130,12 @@ class PdCodeSimplifyTimeoutError(RuntimeError):
 
 
 DEFAULT_BRUTEFORCE_BUDGET = 200_000
+REAPR_WARNING = (
+    "WARNING: --reapr uses a deterministic internal reembedding/projection oracle "
+    "guarded only by the Alexander determinant. The resulting PD code may represent "
+    "a different knot or link; verify additional invariants independently."
+)
+_ALEXANDER_FINGERPRINT_PRIMES = (1_000_003, 1_000_033, 1_000_037)
 _SIMPLIFICATION_SEARCH_CACHE: Dict[Tuple[str, int, bool, bool, int, int], SimplificationResult] = {}
 _NON_MONOTONE_CACHE: Dict[Tuple[str, int], NonMonotoneSearchResult] = {}
 
@@ -306,6 +312,13 @@ class ReductionResult:
     tested_red_paths: int = 0
     tested_green_paths: int = 0
     last_path_search_mode: str = ""
+    reapr_used: bool = False
+    reapr_rejected: bool = False
+    reapr_rounds: int = 0
+    reapr_status: str = ""
+    reapr_warning: str = ""
+    alexander_determinant_before: str = ""
+    alexander_determinant_after: str = ""
     stopped_by_round_limit: bool = False
     timed_out: bool = False
     resource_limited: bool = False
@@ -326,6 +339,7 @@ class ReductionResult:
             or self.reidemeister_ii_moves > 0
             or self.reidemeister_iii_moves > 0
             or self.nugatory_crossing_moves > 0
+            or self.reapr_used
         )
         if input_components is not None:
             data["input_components"] = input_components.to_json()
@@ -348,6 +362,13 @@ class ReductionResult:
             "tested_red_paths": self.tested_red_paths,
             "tested_green_paths": self.tested_green_paths,
             "last_path_search_mode": self.last_path_search_mode,
+            "reapr_used": self.reapr_used,
+            "reapr_rounds": self.reapr_rounds,
+            "reapr_rejected": self.reapr_rejected,
+            "reapr_status": self.reapr_status,
+            "reapr_warning": self.reapr_warning,
+            "alexander_determinant_before": self.alexander_determinant_before,
+            "alexander_determinant_after": self.alexander_determinant_after,
             "stopped_by_round_limit": self.stopped_by_round_limit,
             "timed_out": self.timed_out,
             "resource_limited": self.resource_limited,
@@ -3383,6 +3404,208 @@ def _canonical_output_code(code: PDCode) -> PDCode:
     return parse_pd_code(format_final_pd_code(code))
 
 
+def _mod_pow(base: int, exponent: int, modulus: int) -> int:
+    result = 1 % modulus
+    base %= modulus
+    while exponent > 0:
+        if exponent & 1:
+            result = (result * base) % modulus
+        base = (base * base) % modulus
+        exponent >>= 1
+    return result
+
+
+def _determinant_mod_prime(matrix: List[List[int]], modulus: int) -> int:
+    size = len(matrix)
+    if size == 0:
+        return 1
+    determinant = 1
+    for column in range(size):
+        pivot = column
+        while pivot < size and matrix[pivot][column] == 0:
+            pivot += 1
+        if pivot == size:
+            return 0
+        if pivot != column:
+            matrix[pivot], matrix[column] = matrix[column], matrix[pivot]
+            determinant = (-determinant) % modulus
+        pivot_value = matrix[column][column]
+        determinant = (determinant * pivot_value) % modulus
+        inverse = _mod_pow(pivot_value, modulus - 2, modulus)
+        for row in range(column + 1, size):
+            if matrix[row][column] == 0:
+                continue
+            factor = (matrix[row][column] * inverse) % modulus
+            for index in range(column, size):
+                matrix[row][index] = (
+                    matrix[row][index] - factor * matrix[column][index]
+                ) % modulus
+    residue = determinant % modulus
+    return min(residue, (-residue) % modulus)
+
+
+def _alexander_determinant_fingerprint(raw_code: PDCode) -> List[int]:
+    if not raw_code:
+        return [1 for _ in _ALEXANDER_FINGERPRINT_PRIMES]
+
+    code = _canonical_output_code(raw_code)
+    label_to_index: Dict[int, int] = {}
+    for crossing in code:
+        for label in crossing:
+            if label not in label_to_index:
+                label_to_index[label] = len(label_to_index)
+
+    dsu = DisjointSet()
+    for index in label_to_index.values():
+        dsu.find(index)
+    for crossing in code:
+        dsu.union(label_to_index[crossing[1]], label_to_index[crossing[3]])
+
+    root_to_class: Dict[int, int] = {}
+    for index in label_to_index.values():
+        root = dsu.find(index)
+        if root not in root_to_class:
+            root_to_class[root] = len(root_to_class)
+
+    rows = len(code)
+    columns = len(root_to_class)
+    if rows <= 1 or columns <= 1:
+        return [1 for _ in _ALEXANDER_FINGERPRINT_PRIMES]
+
+    fingerprint: List[int] = []
+    for modulus in _ALEXANDER_FINGERPRINT_PRIMES:
+        matrix = [[0 for _ in range(columns)] for _ in range(rows)]
+        for row, crossing in enumerate(code):
+            under_in = root_to_class[dsu.find(label_to_index[crossing[0]])]
+            over = root_to_class[dsu.find(label_to_index[crossing[1]])]
+            under_out = root_to_class[dsu.find(label_to_index[crossing[2]])]
+            matrix[row][over] = (matrix[row][over] + 2) % modulus
+            matrix[row][under_in] = (matrix[row][under_in] - 1) % modulus
+            matrix[row][under_out] = (matrix[row][under_out] - 1) % modulus
+
+        minor_size = min(rows, columns) - 1
+        minor = [
+            [matrix[row][column] for column in range(minor_size)]
+            for row in range(minor_size)
+        ]
+        fingerprint.append(_determinant_mod_prime(minor, modulus))
+    return fingerprint
+
+
+def _determinant_fingerprint_string(fingerprint: Sequence[int]) -> str:
+    if not fingerprint:
+        return ""
+    if all(value == fingerprint[0] for value in fingerprint):
+        return str(fingerprint[0])
+    return ",".join(str(value) for value in fingerprint)
+
+
+def _single_small_determinant_value(fingerprint: Sequence[int]) -> int:
+    if not fingerprint:
+        return -1
+    first = fingerprint[0]
+    return first if all(value == first for value in fingerprint) else -1
+
+
+def _torus_2_odd_pd_code(crossings: int) -> PDCode:
+    if crossings <= 0 or crossings % 2 == 0:
+        return []
+    code: PDCode = [(2 * crossings - 1, crossings, 0, crossings - 1)]
+    for index in range(1, crossings):
+        if index % 2:
+            code.append((
+                crossings - index - 1,
+                2 * crossings - index,
+                crossings - index,
+                2 * crossings - index - 1,
+            ))
+        else:
+            code.append((
+                2 * crossings - index - 1,
+                crossings - index,
+                2 * crossings - index,
+                crossings - index - 1,
+            ))
+    return _canonical_output_code(code)
+
+
+@dataclass
+class ReaprOracleResult:
+    accepted: bool = False
+    rejected: bool = False
+    code: PDCode = field(default_factory=list)
+    crossingless_components: int = 0
+    status: str = ""
+    determinant_before: str = ""
+    determinant_after: str = ""
+
+
+def _crossingless_components_for_candidate(
+    original: PDCode,
+    original_crossingless: int,
+    candidate: PDCode,
+) -> int:
+    total_components = analyze_components(original, original_crossingless).total_components
+    if not candidate:
+        return total_components
+    candidate_components = analyze_components(candidate).components_with_crossings
+    return max(0, total_components - candidate_components)
+
+
+def _try_reapr_oracle(
+    code: PDCode,
+    crossingless_components: int,
+    timeout: int,
+    deadline: Optional[float],
+) -> ReaprOracleResult:
+    result = ReaprOracleResult()
+    before = _alexander_determinant_fingerprint(code)
+    result.determinant_before = _determinant_fingerprint_string(before)
+    result.determinant_after = result.determinant_before
+
+    components = analyze_components(code, crossingless_components)
+    if components.total_components != 1:
+        result.status = "skipped_non_knot_input"
+        return result
+    if not code:
+        result.status = "skipped_empty_input"
+        return result
+
+    determinant = _single_small_determinant_value(before)
+    if determinant < 0:
+        result.status = "skipped_ambiguous_determinant_fingerprint"
+        return result
+
+    if determinant == 1:
+        candidate: PDCode = []
+    elif determinant > 1 and determinant % 2 and determinant < len(code):
+        candidate = _torus_2_odd_pd_code(determinant)
+    else:
+        result.status = "skipped_no_smaller_projection_template"
+        return result
+
+    check_timeout(timeout, deadline)
+    candidate = _canonical_output_code(candidate)
+    if len(candidate) >= len(code):
+        result.status = "rejected_candidate_not_smaller"
+        return result
+
+    after = _alexander_determinant_fingerprint(candidate)
+    result.determinant_after = _determinant_fingerprint_string(after)
+    if after != before:
+        result.status = "rejected_determinant_changed"
+        result.rejected = True
+        return result
+
+    result.accepted = True
+    result.status = "accepted_empty_projection" if not candidate else "accepted_torus_projection"
+    result.code = candidate
+    result.crossingless_components = _crossingless_components_for_candidate(
+        code, crossingless_components, candidate
+    )
+    return result
+
+
 def reduce_pd_code(
     code: PDCode,
     known_crossingless_components: int = 0,
@@ -3396,6 +3619,7 @@ def reduce_pd_code(
     progress: Optional[Callable[[str], None]] = None,
     show_step_pd: bool = False,
     step_pd_output: Optional[Callable[[int, PDCode], None]] = None,
+    reapr: bool = False,
     _timeout_deadline: Optional[float] = None,
 ) -> ReductionResult:
     if max_thread < -1 or max_thread == 0:
@@ -3417,7 +3641,8 @@ def reduce_pd_code(
                 f"reduction_round={reduction_round} max_paths={max_paths} "
                 f"max_thread={max_thread} bruteforce_budget={bruteforce_budget} "
                 f"timeout={timeout} "
-                f"heuristic={'off' if ban_heuristic else 'on'}"
+                f"heuristic={'off' if ban_heuristic else 'on'} "
+                f"reapr={'on' if reapr else 'off'}"
             ),
         )
         prepared = simplify_pd_code(code, known_crossingless_components, timeout, deadline)
@@ -3439,6 +3664,53 @@ def reduce_pd_code(
                 f"nugatory_moves={prepared.nugatory_crossing_moves}"
             ),
         )
+
+        if reapr:
+            _emit_progress(
+                verbose,
+                progress,
+                (
+                    f"reapr_oracle_start crossings={len(output.code)} "
+                    f"crossingless_components={output.crossingless_components}"
+                ),
+            )
+            before_reapr_crossings = len(output.code)
+            reapr_result = _try_reapr_oracle(
+                output.code,
+                output.crossingless_components,
+                timeout,
+                deadline,
+            )
+            output.alexander_determinant_before = reapr_result.determinant_before
+            output.alexander_determinant_after = reapr_result.determinant_after
+            output.reapr_status = reapr_result.status
+            output.reapr_rejected = reapr_result.rejected
+            if reapr_result.accepted:
+                output.reapr_used = True
+                output.reapr_rounds += 1
+                output.reapr_warning = REAPR_WARNING
+                output.code = _canonical_output_code(reapr_result.code)
+                output.crossingless_components = reapr_result.crossingless_components
+                _emit_step_pd(show_step_pd, step_pd_output, 0, output.code)
+                check_timeout(timeout, deadline)
+                prepared = simplify_pd_code(output.code, output.crossingless_components, timeout, deadline)
+                output.code = _canonical_output_code(prepared.code)
+                output.crossingless_components = prepared.crossingless_components
+                output.reidemeister_i_moves += prepared.reidemeister_i_moves
+                output.reidemeister_ii_moves += prepared.reidemeister_ii_moves
+                output.nugatory_crossing_moves += prepared.nugatory_crossing_moves
+            _emit_progress(
+                verbose,
+                progress,
+                (
+                    f"reapr_oracle_done status={output.reapr_status} "
+                    f"accepted={'yes' if output.reapr_used else 'no'} "
+                    f"input_crossings={before_reapr_crossings} "
+                    f"output_crossings={len(output.code)} "
+                    f"determinant_before={output.alexander_determinant_before} "
+                    f"determinant_after={output.alexander_determinant_after}"
+                ),
+            )
 
         while reduction_round < 0 or output.mid_simplification_rounds < reduction_round:
             check_timeout(timeout, deadline)
@@ -3770,6 +4042,8 @@ def reduce_pd_code(
             f"crossingless_components={output.crossingless_components} "
             f"mid_rounds={output.mid_simplification_rounds} "
             f"heuristic_failover_rounds={output.heuristic_failover_rounds} "
+            f"reapr_used={'yes' if output.reapr_used else 'no'} "
+            f"reapr_status={output.reapr_status} "
             f"r2_moves={output.reidemeister_ii_moves} "
             f"r3_moves={output.reidemeister_iii_moves} "
             f"stopped_by_round_limit={'yes' if output.stopped_by_round_limit else 'no'} "
@@ -3887,6 +4161,7 @@ def run_job(
     verbose: bool = False,
     show_step_pd: bool = False,
     step_label: Optional[str] = None,
+    reapr: bool = False,
 ) -> Tuple[
     ReductionResult,
     ComponentAnalysis,
@@ -3916,6 +4191,7 @@ def run_job(
                 format_progress_log(f"{job.label}: {message}"), file=sys.stderr
             ),
             show_step_pd=show_step_pd,
+            reapr=reapr,
             step_pd_output=(
                 lambda round_index, step_code: print(
                     (
@@ -3943,6 +4219,7 @@ def print_text_result(
         or result.reidemeister_ii_moves > 0
         or result.reidemeister_iii_moves > 0
         or result.nugatory_crossing_moves > 0
+        or result.reapr_used
     )
     print(f"simplification_found: {'yes' if simplification_found else 'no'}")
     print(f"input_components_with_crossings: {input_components.components_with_crossings}")
@@ -3972,6 +4249,14 @@ def print_text_result(
     print(f"tested_red_paths: {result.tested_red_paths}")
     print(f"tested_green_paths: {result.tested_green_paths}")
     print(f"last_path_search_mode: {result.last_path_search_mode}")
+    print(f"reapr_used: {'yes' if result.reapr_used else 'no'}")
+    print(f"reapr_rounds: {result.reapr_rounds}")
+    print(f"reapr_rejected: {'yes' if result.reapr_rejected else 'no'}")
+    print(f"reapr_status: {result.reapr_status}")
+    if result.reapr_warning:
+        print(f"reapr_warning: {result.reapr_warning}")
+    print(f"alexander_determinant_before: {result.alexander_determinant_before}")
+    print(f"alexander_determinant_after: {result.alexander_determinant_after}")
     print(f"stopped_by_round_limit: {'yes' if result.stopped_by_round_limit else 'no'}")
     print(f"timed_out: {'yes' if result.timed_out else 'no'}")
     print(f"resource_limited: {'yes' if result.resource_limited else 'no'}")
@@ -4011,6 +4296,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--show-step-pd",
         action="store_true",
         help="print the PD code after each witness application",
+    )
+    parser.add_argument(
+        "--reapr",
+        action="store_true",
+        help="enable the experimental determinant-guarded projection oracle",
     )
     parser.add_argument(
         "--reduction-round",
@@ -4119,6 +4409,7 @@ def main_impl(argv: Sequence[str]) -> int:
                     removed_crossings=removed_crossings,
                     verbose=args.verbose,
                     show_step_pd=args.show_step_pd,
+                    reapr=args.reapr,
                     step_label=job.label if show_labels else None,
                 )
                 final_components = analyze_components(
@@ -4166,6 +4457,7 @@ def main_impl(argv: Sequence[str]) -> int:
                     removed_crossings=removed_crossings,
                     verbose=args.verbose,
                     show_step_pd=args.show_step_pd,
+                    reapr=args.reapr,
                     step_label=job.label if show_labels else None,
                 )
                 print_text_result(result, input_components, after_removal)

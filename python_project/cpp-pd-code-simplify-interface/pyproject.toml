@@ -1,6 +1,6 @@
 [project]
 name = "cpp-pd-code-simplify-interface"
-version = "0.1.25"
+version = "0.1.26"
 description = "Python interface for cpp-pd-code-simplify with runtime C++ compilation."
 authors = [
     {name = "GGN_2015", email = "neko@jlulug.org"}
@@ -24,7 +24,8 @@ cpp-pd-code-simplify-interface = "cpp_pd_code_simplify_interface.main:main"
 packages = [{ include = "cpp_pd_code_simplify_interface" }]
 include = [
     { path = "build_backend/cpp_pd_code_simplify_interface_build_backend.py", format = ["sdist"] },
-    { path = "cpp_pd_code_simplify_interface/data/src/native_interface.cpp", format = ["sdist", "wheel"] }
+    { path = "cpp_pd_code_simplify_interface/data/src/native_interface.cpp", format = ["sdist", "wheel"] },
+    { path = "cpp_pd_code_simplify_interface/data/include/pdcode_simplify/pdcode_simplify.hpp", format = ["sdist", "wheel"] }
 ]
 
 [tool.setuptools.packages.find]

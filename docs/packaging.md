@@ -92,16 +92,13 @@ directories before redistribution.
 
 ## Dynamic Library Use
 
-Include the public header:
+The core C++ API is header-only. Include the public header directly:
 
 ```cpp
 #include "pdcode_simplify/pdcode_simplify.hpp"
 ```
 
-When consuming the Windows DLL from another C++ target, define
-`PDCODE_SIMPLIFY_SHARED` before including the header so the API is imported
-with `__declspec(dllimport)`.
-
-The exported C++ API uses standard-library types, so consumers should use a
-compiler and runtime ABI compatible with the package that produced the dynamic
-library.
+No `PDCODE_SIMPLIFY_SHARED` import macro is needed for direct C++ use. The
+packaged dynamic library is kept for compatibility with packaging workflows;
+new native C++ code should prefer the header-only API documented in
+[Header-Only C++ Use](header-only.md).
