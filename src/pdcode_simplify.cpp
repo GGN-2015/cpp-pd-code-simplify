@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <deque>
 #include <limits>
@@ -32,8 +33,25 @@ constexpr int kHeuristicMinPathBudget = 24;
 constexpr int kHeuristicMaxPathBudget = 384;
 constexpr int kR3PrepassMaxDepth = 4;
 constexpr int kR3PrepassMaxStates = 256;
+constexpr int kR3PrepassTimeSliceSeconds = 15;
 constexpr int kR3FailoverMaxDepth = 8;
 constexpr int kR3FailoverMaxStates = 4096;
+constexpr int kR3FailoverTimeSliceSeconds = 30;
+constexpr int kMidSearchTimeSliceSeconds = 30;
+constexpr int kNonMonotoneMaxRedLength = 80;
+constexpr int kNonMonotoneMaxDepth = 72;
+constexpr int kNonMonotoneBeamWidth = 32;
+constexpr int kNonMonotoneMaxCandidatesPerState = 96;
+constexpr int kNonMonotoneMaxCandidatesPerLength = 4;
+constexpr int kNonMonotoneMaxRedScansPerLength = 48;
+constexpr int kNonMonotoneMaxRedTestsPerNode = 64;
+constexpr int kNonMonotoneExtraCrossings = 2;
+constexpr int kNonMonotoneMaxTotalIncrease = 14;
+constexpr int kNonMonotoneR3MovesPerState = 16;
+constexpr int kNonMonotoneHeuristicStateBudget = 384;
+constexpr int kNonMonotoneHeuristicPathBudget = 8;
+constexpr std::size_t kNonMonotoneMaxGreenTestsPerState = 4096;
+constexpr std::size_t kNonMonotoneMaxTotalGreenTests = 4000000;
 
 int positive_mod(int value, int modulus) {
     int result = value % modulus;
@@ -56,6 +74,15 @@ int max_label(const PDCode& code) {
         }
     }
     return result;
+}
+
+std::uint64_t stable_hash_text(const std::string& text) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (unsigned char ch : text) {
+        hash ^= static_cast<std::uint64_t>(ch);
+        hash *= 1099511628211ULL;
+    }
+    return hash;
 }
 
 long long face_pair_key(int a, int b) {
@@ -1238,6 +1265,21 @@ std::vector<std::vector<Endpoint>> possible_red_lines(const Diagram& diagram) {
             candidates.emplace_back(line.begin(), line.end() - static_cast<std::ptrdiff_t>(i));
         }
     }
+    std::sort(candidates.begin(), candidates.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.size() != rhs.size()) {
+            return lhs.size() < rhs.size();
+        }
+        if (lhs.front().crossing != rhs.front().crossing) {
+            return lhs.front().crossing < rhs.front().crossing;
+        }
+        if (lhs.front().strand != rhs.front().strand) {
+            return lhs.front().strand < rhs.front().strand;
+        }
+        if (lhs.back().crossing != rhs.back().crossing) {
+            return lhs.back().crossing < rhs.back().crossing;
+        }
+        return lhs.back().strand < rhs.back().strand;
+    });
     return candidates;
 }
 
@@ -1546,6 +1588,121 @@ std::vector<std::vector<int>> collect_heuristic_paths(
             static_cast<long long>(depth) * static_cast<long long>(face_count) + current;
         int& beam_count = popped_by_depth_face[beam_key];
         if (beam_count >= kHeuristicBeamWidth) {
+            continue;
+        }
+        ++beam_count;
+
+        std::vector<HeuristicStep> steps;
+        for (int edge_index : graph.adjacency[current]) {
+            const GraphEdge& edge = graph.edges[edge_index];
+            const int next = edge.u == current ? edge.v : edge.u;
+            if (state.visited[next]) {
+                continue;
+            }
+            if (distance[next] == infinity) {
+                continue;
+            }
+            const int new_weight = state.weight + edge.weight;
+            if (new_weight >= cutoff) {
+                continue;
+            }
+            const int new_depth = depth + 1;
+            if (new_depth + distance[next] >= cutoff) {
+                continue;
+            }
+            HeuristicStep step;
+            step.next = next;
+            step.edge_index = edge_index;
+            step.edge_weight = edge.weight;
+            step.distance = distance[next];
+            step.degree_penalty = std::max(0, static_cast<int>(graph.adjacency[next].size()) - 2);
+            steps.push_back(step);
+        }
+        std::sort(steps.begin(), steps.end(), heuristic_step_less);
+
+        for (const HeuristicStep& step : steps) {
+            const GraphEdge& edge = graph.edges[step.edge_index];
+            HeuristicState next_state;
+            next_state.path = state.path;
+            next_state.path.push_back(step.next);
+            next_state.visited = state.visited;
+            next_state.visited[step.next] = true;
+            next_state.weight = state.weight + edge.weight;
+            next_state.branch_penalty = state.branch_penalty + step.degree_penalty;
+            next_state.estimated_weight = next_state.weight + distance[step.next];
+            next_state.estimated_length =
+                static_cast<int>(next_state.path.size()) - 1 + distance[step.next];
+            next_state.serial = serial++;
+            queue.push(std::move(next_state));
+        }
+    }
+
+    return paths;
+}
+
+std::vector<std::vector<int>> collect_limited_heuristic_paths(
+    const DualGraph& graph,
+    int source,
+    int target,
+    int cutoff,
+    int state_budget,
+    int path_budget,
+    const SimplifierOptions& options) {
+    check_timeout(options);
+    std::vector<std::vector<int>> paths;
+    const int face_count = static_cast<int>(graph.faces.size());
+    if (source < 0 || target < 0 ||
+        source >= face_count || target >= face_count || cutoff <= 0 ||
+        state_budget <= 0 || path_budget <= 0) {
+        return paths;
+    }
+    if (source == target) {
+        paths.push_back(std::vector<int>{source});
+        return paths;
+    }
+
+    const std::vector<int> distance = heuristic_distances_to_target(graph, target, cutoff, options);
+    const int infinity = std::numeric_limits<int>::max() / 4;
+    if (distance[source] == infinity || distance[source] >= cutoff) {
+        return paths;
+    }
+
+    std::priority_queue<HeuristicState, std::vector<HeuristicState>, HeuristicStateWorse> queue;
+    int serial = 0;
+    HeuristicState initial;
+    initial.path.push_back(source);
+    initial.visited.assign(face_count, false);
+    initial.visited[source] = true;
+    initial.estimated_weight = distance[source];
+    initial.estimated_length = distance[source];
+    initial.serial = serial++;
+    queue.push(initial);
+
+    std::map<long long, int> popped_by_depth_face;
+    int popped_states = 0;
+    while (!queue.empty() && popped_states < state_budget &&
+           static_cast<int>(paths.size()) < path_budget) {
+        check_timeout(options);
+        HeuristicState state = queue.top();
+        queue.pop();
+        ++popped_states;
+
+        const int current = state.path.back();
+        const int depth = static_cast<int>(state.path.size()) - 1;
+        if (current == target) {
+            if (state.weight < cutoff) {
+                paths.push_back(state.path);
+            }
+            continue;
+        }
+        if (depth >= cutoff - 1) {
+            continue;
+        }
+
+        const long long beam_key =
+            static_cast<long long>(depth) * static_cast<long long>(face_count) + current;
+        int& beam_count = popped_by_depth_face[beam_key];
+        if (beam_count >= std::max(2, kHeuristicBeamWidth / 2)) {
             continue;
         }
         ++beam_count;
@@ -2194,6 +2351,24 @@ void check_timeout(const SimplifierOptions& options) {
     }
 }
 
+SimplifierOptions with_time_slice(SimplifierOptions options, int seconds) {
+    if (seconds <= 0) {
+        return options;
+    }
+    const auto soft_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+    if (!options.has_timeout_deadline || soft_deadline < options.timeout_deadline) {
+        options.has_timeout_deadline = true;
+        options.timeout_deadline = soft_deadline;
+        options.timeout_seconds = seconds;
+    }
+    return options;
+}
+
+bool timeout_expired(const SimplifierOptions& options) {
+    return options.has_timeout_deadline &&
+           std::chrono::steady_clock::now() >= options.timeout_deadline;
+}
+
 }  // namespace
 
 PDCode parse_pd_code(const std::string& text) {
@@ -2490,14 +2665,21 @@ RandomInflationResult randomly_increase_crossings(
     return result;
 }
 
-PDSimplificationResult simplify_pd_code(
+PDSimplificationResult simplify_pd_code_checked(
     const PDCode& code,
-    std::size_t known_crossingless_components) {
+    std::size_t known_crossingless_components,
+    const SimplifierOptions* options) {
+    if (options != nullptr) {
+        check_timeout(*options);
+    }
     PDSimplificationResult result;
     result.code = canonical_output_code(code);
     result.crossingless_components = known_crossingless_components;
 
     while (true) {
+        if (options != nullptr) {
+            check_timeout(*options);
+        }
         const int r1_before = result.reidemeister_i_moves;
         result.code = erase_r1_moves(
             result.code,
@@ -2507,6 +2689,9 @@ PDSimplificationResult simplify_pd_code(
             continue;
         }
 
+        if (options != nullptr) {
+            check_timeout(*options);
+        }
         const ReidemeisterIIMove r2_move = find_reidemeister_ii_move(result.code);
         if (r2_move.found) {
             result.code = erase_one_reidemeister_ii_move(
@@ -2517,6 +2702,9 @@ PDSimplificationResult simplify_pd_code(
             continue;
         }
 
+        if (options != nullptr) {
+            check_timeout(*options);
+        }
         const int crossing_index = find_nugatory_crossing(result.code);
         if (crossing_index < 0) {
             break;
@@ -2529,6 +2717,12 @@ PDSimplificationResult simplify_pd_code(
     }
 
     return result;
+}
+
+PDSimplificationResult simplify_pd_code(
+    const PDCode& code,
+    std::size_t known_crossingless_components) {
+    return simplify_pd_code_checked(code, known_crossingless_components, nullptr);
 }
 
 struct ReidemeisterIIIFailoverResult {
@@ -2584,7 +2778,7 @@ ReidemeisterIIIFailoverResult find_reidemeister_iii_failover(
             check_timeout(options);
             const PDCode moved = apply_reidemeister_iii_move(state.code, move);
             PDSimplificationResult simplified =
-                simplify_pd_code(moved, state.crossingless_components);
+                simplify_pd_code_checked(moved, state.crossingless_components, &options);
             if (simplified.code.size() < target_crossings) {
                 result.found = true;
                 result.code = canonical_output_code(simplified.code);
@@ -2610,6 +2804,565 @@ ReidemeisterIIIFailoverResult find_reidemeister_iii_failover(
                     break;
                 }
             }
+        }
+    }
+
+    return result;
+}
+
+struct NonMonotoneStep {
+    PDCode code;
+    std::size_t crossingless_components = 0;
+    std::string kind;
+    int red_length = 0;
+    int green_length = 0;
+    int reidemeister_i_moves = 0;
+    int reidemeister_ii_moves = 0;
+    int reidemeister_iii_moves = 0;
+    int nugatory_crossing_moves = 0;
+};
+
+struct NonMonotoneNode {
+    PDCode code;
+    std::size_t crossingless_components = 0;
+    std::vector<NonMonotoneStep> steps;
+    int depth = 0;
+    int r3_potential = 0;
+    int serial = 0;
+};
+
+struct NonMonotoneSearchResult {
+    bool found = false;
+    PDCode code;
+    std::size_t crossingless_components = 0;
+    std::vector<NonMonotoneStep> steps;
+    std::size_t tested_red_paths = 0;
+    std::size_t tested_green_paths = 0;
+    std::size_t applied_candidates = 0;
+    std::size_t generated_states = 0;
+    int depth = 0;
+    int reidemeister_i_moves = 0;
+    int reidemeister_ii_moves = 0;
+    int reidemeister_iii_moves = 0;
+    int nugatory_crossing_moves = 0;
+};
+
+int safe_r3_potential(const PDCode& code, const SimplifierOptions& options) {
+    check_timeout(options);
+    if (code.size() < 3) {
+        return 0;
+    }
+    return static_cast<int>(possible_reidemeister_iii_moves(code).size());
+}
+
+bool non_monotone_node_less(
+    const NonMonotoneNode& lhs,
+    const NonMonotoneNode& rhs,
+    std::size_t target_crossings) {
+    const int lhs_delta = static_cast<int>(lhs.code.size()) - static_cast<int>(target_crossings);
+    const int rhs_delta = static_cast<int>(rhs.code.size()) - static_cast<int>(target_crossings);
+    if (lhs_delta != rhs_delta) {
+        return lhs_delta < rhs_delta;
+    }
+    if (lhs.r3_potential != rhs.r3_potential) {
+        return lhs.r3_potential > rhs.r3_potential;
+    }
+    if (lhs.depth != rhs.depth) {
+        return lhs.depth < rhs.depth;
+    }
+    if (lhs.steps.size() != rhs.steps.size()) {
+        return lhs.steps.size() < rhs.steps.size();
+    }
+    return lhs.serial < rhs.serial;
+}
+
+void accumulate_non_monotone_counts(
+    NonMonotoneSearchResult& result,
+    const NonMonotoneStep& step) {
+    result.reidemeister_i_moves += step.reidemeister_i_moves;
+    result.reidemeister_ii_moves += step.reidemeister_ii_moves;
+    result.reidemeister_iii_moves += step.reidemeister_iii_moves;
+    result.nugatory_crossing_moves += step.nugatory_crossing_moves;
+}
+
+bool add_non_monotone_candidate(
+    const NonMonotoneNode& parent,
+    const PDCode& raw_code,
+    std::size_t raw_crossingless_components,
+    const NonMonotoneStep& raw_step,
+    const std::set<std::string>& accepted_states,
+    std::set<std::string>& candidate_states,
+    std::size_t max_allowed_crossings,
+    std::size_t target_crossings,
+    int& serial,
+    const SimplifierOptions& options,
+    std::vector<NonMonotoneNode>& candidates,
+    NonMonotoneSearchResult& result) {
+    check_timeout(options);
+    const std::string key = format_final_pd_code(raw_code);
+    if (accepted_states.count(key) != 0 || !candidate_states.insert(key).second) {
+        return false;
+    }
+    PDCode code = parse_pd_code(key);
+    if (code.size() > max_allowed_crossings) {
+        return false;
+    }
+
+    NonMonotoneStep step = raw_step;
+    step.code = code;
+    step.crossingless_components = raw_crossingless_components;
+
+    NonMonotoneNode node;
+    node.code = std::move(code);
+    node.crossingless_components = raw_crossingless_components;
+    node.steps = parent.steps;
+    node.steps.push_back(std::move(step));
+    node.depth = parent.depth + 1;
+    node.r3_potential = safe_r3_potential(node.code, options);
+    node.serial = serial++;
+
+    ++result.generated_states;
+    if (node.code.size() < target_crossings) {
+        result.found = true;
+        result.code = node.code;
+        result.crossingless_components = node.crossingless_components;
+        result.steps = node.steps;
+        result.depth = node.depth;
+        for (const NonMonotoneStep& stored_step : result.steps) {
+            accumulate_non_monotone_counts(result, stored_step);
+        }
+        return true;
+    }
+
+    candidates.push_back(std::move(node));
+    return true;
+}
+
+void generate_non_monotone_r3_candidates(
+    const NonMonotoneNode& node,
+    const std::set<std::string>& accepted_states,
+    std::set<std::string>& candidate_states,
+    std::size_t max_allowed_crossings,
+    std::size_t target_crossings,
+    int& serial,
+    const SimplifierOptions& options,
+    std::vector<NonMonotoneNode>& candidates,
+    NonMonotoneSearchResult& result) {
+    check_timeout(options);
+    if (static_cast<int>(candidates.size()) >= kNonMonotoneMaxCandidatesPerState) {
+        return;
+    }
+    if (options.verbose) {
+        std::ostringstream message;
+        message << "non_monotone_r3_start node_depth=" << node.depth
+                << " crossings=" << node.code.size()
+                << " candidates=" << candidates.size();
+        emit_progress(options, message.str());
+    }
+    std::vector<ReidemeisterIIIMove> moves = possible_reidemeister_iii_moves(node.code);
+    int tried = 0;
+    for (const ReidemeisterIIIMove& move : moves) {
+        check_timeout(options);
+        if (tried >= kNonMonotoneR3MovesPerState ||
+            static_cast<int>(candidates.size()) >= kNonMonotoneMaxCandidatesPerState) {
+            break;
+        }
+        ++tried;
+        const PDCode moved = apply_reidemeister_iii_move(node.code, move);
+        const PDSimplificationResult simplified =
+            simplify_pd_code_checked(moved, node.crossingless_components, &options);
+
+        NonMonotoneStep step;
+        step.kind = "r3";
+        step.reidemeister_i_moves = simplified.reidemeister_i_moves;
+        step.reidemeister_ii_moves = simplified.reidemeister_ii_moves;
+        step.reidemeister_iii_moves = 1;
+        step.nugatory_crossing_moves = simplified.nugatory_crossing_moves;
+
+        (void)add_non_monotone_candidate(
+                node,
+                simplified.code,
+                simplified.crossingless_components,
+                step,
+                accepted_states,
+                candidate_states,
+                max_allowed_crossings,
+                target_crossings,
+                serial,
+                options,
+                candidates,
+                result);
+        if (result.found) {
+            return;
+        }
+    }
+    if (options.verbose) {
+        std::ostringstream message;
+        message << "non_monotone_r3_done node_depth=" << node.depth
+                << " tried=" << tried
+                << " candidates=" << candidates.size()
+                << " generated_states=" << result.generated_states;
+        emit_progress(options, message.str());
+    }
+}
+
+void generate_non_monotone_surgery_candidates(
+    const NonMonotoneNode& node,
+    const std::set<std::string>& accepted_states,
+    std::set<std::string>& candidate_states,
+    std::size_t max_allowed_crossings,
+    std::size_t target_crossings,
+    int& serial,
+    std::size_t& total_green_tests,
+    const SimplifierOptions& options,
+    std::vector<NonMonotoneNode>& candidates,
+    NonMonotoneSearchResult& result) {
+    check_timeout(options);
+    const std::string state_key = format_final_pd_code(node.code);
+    const std::uint64_t state_hash = stable_hash_text(state_key);
+    const Diagram diagram(node.code);
+    const DualGraph base_graph(diagram);
+    const std::vector<std::vector<Endpoint>> red_lines = possible_red_lines(diagram);
+
+    std::map<int, std::vector<std::size_t>> red_by_length;
+    for (std::size_t i = 0; i < red_lines.size(); ++i) {
+        const int length = static_cast<int>(red_lines[i].size());
+        if (length > kNonMonotoneMaxRedLength) {
+            break;
+        }
+        red_by_length[length].push_back(i);
+    }
+
+    std::size_t state_green_tests = 0;
+    int state_red_tests = 0;
+    std::vector<int> length_order;
+    length_order.reserve(red_by_length.size());
+    for (const auto& item : red_by_length) {
+        length_order.push_back(item.first);
+    }
+    const std::size_t length_start = 0;
+
+    for (std::size_t length_offset = 0; length_offset < length_order.size(); ++length_offset) {
+        const int red_length = length_order[(length_start + length_offset) % length_order.size()];
+        const std::vector<std::size_t>& indices = red_by_length.at(red_length);
+        if (indices.empty()) {
+            continue;
+        }
+        int accepted_for_length = 0;
+        bool length_done = false;
+        const std::size_t start_slot =
+            static_cast<std::size_t>(
+                (state_hash + static_cast<std::uint64_t>(red_length) * 11400714819323198485ULL) %
+                static_cast<std::uint64_t>(indices.size()));
+        const std::size_t scan_limit =
+            std::min<std::size_t>(indices.size(), kNonMonotoneMaxRedScansPerLength);
+
+        for (std::size_t slot_offset = 0; slot_offset < scan_limit; ++slot_offset) {
+            check_timeout(options);
+            if (result.found ||
+                static_cast<int>(candidates.size()) >= kNonMonotoneMaxCandidatesPerState ||
+                state_red_tests >= kNonMonotoneMaxRedTestsPerNode ||
+                state_green_tests >= kNonMonotoneMaxGreenTestsPerState ||
+                total_green_tests >= kNonMonotoneMaxTotalGreenTests) {
+                return;
+            }
+            if (accepted_for_length >= kNonMonotoneMaxCandidatesPerLength) {
+                break;
+            }
+            const std::size_t red_index =
+                indices[(start_slot + slot_offset) % indices.size()];
+            const auto& red_path = red_lines[red_index];
+            ++state_red_tests;
+            ++result.tested_red_paths;
+            if (options.verbose && (result.tested_red_paths <= 8 || result.tested_red_paths % 64 == 0)) {
+                std::ostringstream message;
+                message << "non_monotone_progress node_depth=" << node.depth
+                        << " red_length=" << red_length
+                        << " tested_red=" << result.tested_red_paths
+                        << " tested_green=" << result.tested_green_paths
+                        << " applied_candidates=" << result.applied_candidates
+                        << " candidates=" << candidates.size()
+                        << " state_green_tests=" << state_green_tests
+                        << " total_green_tests=" << total_green_tests;
+                emit_progress(options, message.str());
+            }
+
+            DualGraph graph = base_graph;
+            const Endpoint start = red_path.front();
+            const Endpoint end = red_path.back();
+            const std::array<int, 2> sources{
+                graph.edge_to_face[endpoint_key(start)],
+                graph.edge_to_face[endpoint_key(diagram.opposite(start))]};
+            const std::array<int, 2> destinations{
+                graph.edge_to_face[endpoint_key(end)],
+                graph.edge_to_face[endpoint_key(diagram.opposite(end))]};
+
+            for (std::size_t i = 1; i + 1 < red_path.size(); ++i) {
+                const Endpoint endpoint = red_path[i];
+                const int right_region = graph.edge_to_face[endpoint_key(endpoint)];
+                const int left_region = graph.edge_to_face[endpoint_key(diagram.opposite(endpoint))];
+                if (GraphEdge* edge = graph.mutable_edge(right_region, left_region)) {
+                    edge->weight = kBlockedWeight;
+                }
+            }
+
+            const int cutoff = red_length + kNonMonotoneExtraCrossings;
+            for (int source : sources) {
+                for (int destination : destinations) {
+                    check_timeout(options);
+                    std::vector<std::vector<int>> green_paths =
+                        collect_limited_heuristic_paths(
+                            graph,
+                            source,
+                            destination,
+                            cutoff,
+                            kNonMonotoneHeuristicStateBudget,
+                            kNonMonotoneHeuristicPathBudget,
+                            options);
+                    for (const std::vector<int>& green_path : green_paths) {
+                        check_timeout(options);
+                        if (result.found ||
+                            static_cast<int>(candidates.size()) >= kNonMonotoneMaxCandidatesPerState ||
+                            state_green_tests >= kNonMonotoneMaxGreenTestsPerState ||
+                            total_green_tests >= kNonMonotoneMaxTotalGreenTests) {
+                            return;
+                        }
+                        if (accepted_for_length >= kNonMonotoneMaxCandidatesPerLength) {
+                            length_done = true;
+                            break;
+                        }
+                        if (static_cast<int>(green_path.size()) > red_length + kNonMonotoneExtraCrossings) {
+                            continue;
+                        }
+                        ++state_green_tests;
+                        ++total_green_tests;
+                        ++result.tested_green_paths;
+
+                        for (Direction direction : {Direction::Left, Direction::Right}) {
+                            SimplificationResult witness;
+                            witness.path_search_mode = "non_monotone";
+                            if (!do_check(diagram, graph, red_path, green_path, direction, witness, options)) {
+                                continue;
+                            }
+
+                            try {
+                                const MidSimplificationApplyResult applied =
+                                    apply_simplification_witness(
+                                        node.code,
+                                        witness,
+                                        node.crossingless_components);
+                                const PDSimplificationResult simplified =
+                                    simplify_pd_code_checked(
+                                        applied.code,
+                                        applied.crossingless_components,
+                                        &options);
+                                ++result.applied_candidates;
+
+                                NonMonotoneStep step;
+                                step.kind = "surgery";
+                                step.red_length = red_length;
+                                step.green_length = static_cast<int>(green_path.size());
+                                step.reidemeister_i_moves = simplified.reidemeister_i_moves;
+                                step.reidemeister_ii_moves = simplified.reidemeister_ii_moves;
+                                step.nugatory_crossing_moves = simplified.nugatory_crossing_moves;
+
+                                const bool accepted = add_non_monotone_candidate(
+                                    node,
+                                    simplified.code,
+                                    simplified.crossingless_components,
+                                    step,
+                                    accepted_states,
+                                    candidate_states,
+                                    max_allowed_crossings,
+                                    target_crossings,
+                                    serial,
+                                    options,
+                                    candidates,
+                                    result);
+                                if (result.found) {
+                                    return;
+                                }
+                                if (accepted) {
+                                    ++accepted_for_length;
+                                    if (accepted_for_length >= kNonMonotoneMaxCandidatesPerLength) {
+                                        length_done = true;
+                                        break;
+                                    }
+                                }
+                            } catch (const std::exception&) {
+                                continue;
+                            }
+                        }
+                        if (length_done) {
+                            break;
+                        }
+                    }
+                    if (length_done) {
+                        break;
+                    }
+                }
+                if (length_done) {
+                    break;
+                }
+            }
+            if (length_done) {
+                break;
+            }
+        }
+    }
+}
+
+std::vector<NonMonotoneNode> select_non_monotone_beam(
+    std::vector<NonMonotoneNode> candidates,
+    std::size_t target_crossings) {
+    std::vector<NonMonotoneNode> selected;
+    selected.reserve(kNonMonotoneBeamWidth);
+    std::set<int> selected_serials;
+
+    auto take_candidate = [&](NonMonotoneNode& candidate, std::map<int, int>& selected_by_delta) {
+        const int delta =
+            static_cast<int>(candidate.code.size()) - static_cast<int>(target_crossings);
+        if (selected_serials.count(candidate.serial) != 0) {
+            return;
+        }
+        const int same_crossing_cap = std::max(3, kNonMonotoneBeamWidth / 3);
+        const int other_crossing_cap = std::max(2, kNonMonotoneBeamWidth / 5);
+        const int cap = delta == 0 ? same_crossing_cap : other_crossing_cap;
+        if (selected_by_delta[delta] >= cap && selected.size() + 1 < kNonMonotoneBeamWidth) {
+            return;
+        }
+        ++selected_by_delta[delta];
+        selected_serials.insert(candidate.serial);
+        selected.push_back(candidate);
+    };
+
+    std::sort(
+        candidates.begin(),
+        candidates.end(),
+        [&](const NonMonotoneNode& lhs, const NonMonotoneNode& rhs) {
+            return non_monotone_node_less(lhs, rhs, target_crossings);
+        });
+
+    std::map<int, int> crossing_first_by_delta;
+    for (NonMonotoneNode& candidate : candidates) {
+        take_candidate(candidate, crossing_first_by_delta);
+        if (static_cast<int>(selected.size()) >= kNonMonotoneBeamWidth / 2) {
+            break;
+        }
+    }
+
+    std::sort(
+        candidates.begin(),
+        candidates.end(),
+        [&](const NonMonotoneNode& lhs, const NonMonotoneNode& rhs) {
+            if (lhs.r3_potential != rhs.r3_potential) {
+                return lhs.r3_potential > rhs.r3_potential;
+            }
+            return non_monotone_node_less(lhs, rhs, target_crossings);
+        });
+
+    std::map<int, int> r3_first_by_delta;
+    for (NonMonotoneNode& candidate : candidates) {
+        take_candidate(candidate, r3_first_by_delta);
+        if (static_cast<int>(selected.size()) >= kNonMonotoneBeamWidth) {
+            break;
+        }
+    }
+    return selected;
+}
+
+NonMonotoneSearchResult find_non_monotone_reduction(
+    const PDCode& code,
+    std::size_t crossingless_components,
+    const SimplifierOptions& options) {
+    check_timeout(options);
+    NonMonotoneSearchResult result;
+    result.code = code;
+    result.crossingless_components = crossingless_components;
+    const std::size_t target_crossings = code.size();
+    const std::size_t max_allowed_crossings =
+        target_crossings + static_cast<std::size_t>(kNonMonotoneMaxTotalIncrease);
+
+    std::set<std::string> accepted_states;
+    accepted_states.insert(format_final_pd_code(code));
+
+    int serial = 0;
+    NonMonotoneNode initial;
+    initial.code = code;
+    initial.crossingless_components = crossingless_components;
+    initial.depth = 0;
+    initial.r3_potential = safe_r3_potential(code, options);
+    initial.serial = serial++;
+
+    std::vector<NonMonotoneNode> beam;
+    beam.push_back(std::move(initial));
+    std::size_t total_green_tests = 0;
+
+    for (int depth = 0; depth < kNonMonotoneMaxDepth && !beam.empty(); ++depth) {
+        check_timeout(options);
+        std::vector<NonMonotoneNode> candidates;
+        std::set<std::string> candidate_states;
+        for (const NonMonotoneNode& node : beam) {
+            check_timeout(options);
+            generate_non_monotone_r3_candidates(
+                node,
+                accepted_states,
+                candidate_states,
+                max_allowed_crossings,
+                target_crossings,
+                serial,
+                options,
+                candidates,
+                result);
+            if (result.found) {
+                return result;
+            }
+            if (static_cast<int>(candidates.size()) >= kNonMonotoneMaxCandidatesPerState) {
+                break;
+            }
+            generate_non_monotone_surgery_candidates(
+                node,
+                accepted_states,
+                candidate_states,
+                max_allowed_crossings,
+                target_crossings,
+                serial,
+                total_green_tests,
+                options,
+                candidates,
+                result);
+            if (result.found) {
+                return result;
+            }
+            if (static_cast<int>(candidates.size()) >= kNonMonotoneMaxCandidatesPerState) {
+                break;
+            }
+            if (total_green_tests >= kNonMonotoneMaxTotalGreenTests) {
+                break;
+            }
+        }
+
+        beam = select_non_monotone_beam(std::move(candidates), target_crossings);
+        for (const NonMonotoneNode& node : beam) {
+            accepted_states.insert(format_final_pd_code(node.code));
+        }
+        if (options.verbose) {
+            std::ostringstream message;
+            message << "non_monotone_depth depth=" << (depth + 1)
+                    << " beam=" << beam.size()
+                    << " generated_states=" << result.generated_states
+                    << " tested_red=" << result.tested_red_paths
+                    << " tested_green=" << result.tested_green_paths
+                    << " applied_candidates=" << result.applied_candidates
+                    << " total_green_budget=" << total_green_tests;
+            if (!beam.empty()) {
+                message << " best_crossings=" << beam.front().code.size()
+                        << " best_r3_potential=" << beam.front().r3_potential;
+            }
+            emit_progress(options, message.str());
+        }
+        if (total_green_tests >= kNonMonotoneMaxTotalGreenTests) {
+            break;
         }
     }
 
@@ -2962,17 +3715,26 @@ SimplificationResult find_simplification(
     check_timeout(run_options);
     const auto red_lines = possible_red_lines(diagram);
     check_timeout(run_options);
-    const bool brute_force_mode = run_options.max_paths == -1 && run_options.ban_heuristic;
-    const int worker_count = brute_force_mode
+    const bool parallel_red_path_mode = run_options.max_paths == -1;
+    const bool brute_force_mode = parallel_red_path_mode && run_options.ban_heuristic;
+    const int worker_count = parallel_red_path_mode
         ? selected_bruteforce_worker_count(
               run_options.max_threads,
               static_cast<int>(red_lines.size()))
         : 1;
     BruteForceBudgetState brute_budget(run_options.bruteforce_budget);
     BruteForceBudgetState* brute_budget_ptr = brute_force_mode ? &brute_budget : nullptr;
-    if (brute_force_mode && run_options.max_threads == -1) {
+    if (parallel_red_path_mode && run_options.max_threads == -1) {
         std::ostringstream message;
-        message << "bruteforce_threads max_thread=-1"
+        message << result.path_search_mode << "_threads max_thread=-1"
+                << " actual_threads=" << worker_count
+                << " red_paths=" << red_lines.size()
+                << " bruteforce_budget=" << run_options.bruteforce_budget;
+        emit_progress(run_options, message.str());
+    } else if (parallel_red_path_mode && run_options.verbose && worker_count > 1) {
+        std::ostringstream message;
+        message << result.path_search_mode << "_threads max_thread="
+                << run_options.max_threads
                 << " actual_threads=" << worker_count
                 << " red_paths=" << red_lines.size()
                 << " bruteforce_budget=" << run_options.bruteforce_budget;
@@ -2990,8 +3752,18 @@ SimplificationResult find_simplification(
             brute_budget_ptr);
     }
 
-    for (const auto& red_path : red_lines) {
+    for (std::size_t red_index = 0; red_index < red_lines.size(); ++red_index) {
+        const auto& red_path = red_lines[red_index];
         check_timeout(run_options);
+        if (run_options.verbose && (red_index == 0 || red_index % 1024 == 0)) {
+            std::ostringstream message;
+            message << "search_progress mode=" << result.path_search_mode
+                    << " red_index=" << red_index
+                    << " red_paths=" << red_lines.size()
+                    << " red_length=" << red_path.size()
+                    << " tested_green=" << result.tested_green_paths;
+            emit_progress(run_options, message.str());
+        }
         ++result.tested_red_paths;
         const RedPathSearchOutcome outcome = search_single_red_path(
             code,
@@ -3030,6 +3802,8 @@ ReductionResult reduce_pd_code(
     ReductionResult output;
     output.code = code;
     output.crossingless_components = known_crossingless_components;
+    PDCode best_code = output.code;
+    std::size_t best_crossingless_components = output.crossingless_components;
 
     try {
         check_timeout(run_options);
@@ -3047,12 +3821,16 @@ ReductionResult reduce_pd_code(
         }
 
         const PDSimplificationResult prepared =
-            simplify_pd_code(code, known_crossingless_components);
+            simplify_pd_code_checked(code, known_crossingless_components, &run_options);
         output.code = canonical_output_code(prepared.code);
         output.crossingless_components = prepared.crossingless_components;
         output.reidemeister_i_moves = prepared.reidemeister_i_moves;
         output.reidemeister_ii_moves = prepared.reidemeister_ii_moves;
         output.nugatory_crossing_moves = prepared.nugatory_crossing_moves;
+        std::set<std::string> seen_reduction_states;
+        seen_reduction_states.insert(format_final_pd_code(output.code));
+        best_code = output.code;
+        best_crossingless_components = output.crossingless_components;
         check_timeout(run_options);
         {
             std::ostringstream message;
@@ -3077,13 +3855,26 @@ ReductionResult reduce_pd_code(
                             << " max_states=" << kR3PrepassMaxStates;
                     emit_progress(run_options, message.str());
                 }
-                const ReidemeisterIIIFailoverResult r3_prepass =
-                    find_reidemeister_iii_failover(
+                ReidemeisterIIIFailoverResult r3_prepass;
+                try {
+                    const SimplifierOptions r3_options =
+                        with_time_slice(run_options, kR3PrepassTimeSliceSeconds);
+                    r3_prepass = find_reidemeister_iii_failover(
                         output.code,
                         output.crossingless_components,
-                        run_options,
+                        r3_options,
                         kR3PrepassMaxDepth,
                         kR3PrepassMaxStates);
+                } catch (const TimeoutError&) {
+                    if (timeout_expired(run_options)) {
+                        throw;
+                    }
+                    std::ostringstream timeout_message;
+                    timeout_message << "round " << round
+                                    << " r3_prepass_timeout seconds="
+                                    << kR3PrepassTimeSliceSeconds;
+                    emit_progress(run_options, timeout_message.str());
+                }
                 {
                     std::ostringstream message;
                     message << "round " << round
@@ -3101,6 +3892,11 @@ ReductionResult reduce_pd_code(
                 if (r3_prepass.found) {
                     output.code = canonical_output_code(r3_prepass.code);
                     output.crossingless_components = r3_prepass.crossingless_components;
+                    seen_reduction_states.insert(format_final_pd_code(output.code));
+                    if (output.code.size() < best_code.size()) {
+                        best_code = output.code;
+                        best_crossingless_components = output.crossingless_components;
+                    }
                     output.reidemeister_i_moves += r3_prepass.reidemeister_i_moves;
                     output.reidemeister_ii_moves += r3_prepass.reidemeister_ii_moves;
                     output.reidemeister_iii_moves += r3_prepass.reidemeister_iii_moves;
@@ -3119,7 +3915,25 @@ ReductionResult reduce_pd_code(
                         << " max_thread=" << search_options.max_threads;
                 emit_progress(run_options, message.str());
             }
-            SimplificationResult search = find_simplification(output.code, search_options);
+            SimplificationResult search;
+            try {
+                SimplifierOptions sliced_search_options = search_options;
+                if (run_options.max_paths == -1 && !run_options.ban_heuristic) {
+                    sliced_search_options =
+                        with_time_slice(search_options, kMidSearchTimeSliceSeconds);
+                }
+                search = find_simplification(output.code, sliced_search_options);
+            } catch (const TimeoutError&) {
+                if (timeout_expired(run_options)) {
+                    throw;
+                }
+                search.path_search_mode = search_mode_for_options(search_options);
+                std::ostringstream timeout_message;
+                timeout_message << "round " << round
+                                << " search_timeout seconds="
+                                << kMidSearchTimeSliceSeconds;
+                emit_progress(run_options, timeout_message.str());
+            }
             output.tested_red_paths += search.tested_red_paths;
             output.tested_green_paths += search.tested_green_paths;
             output.last_path_search_mode = search.path_search_mode;
@@ -3136,6 +3950,81 @@ ReductionResult reduce_pd_code(
             }
 
             if (!search.found && run_options.max_paths == -1 && !run_options.ban_heuristic) {
+                {
+                    std::ostringstream message;
+                    message << "round " << round
+                            << " non_monotone_start crossings=" << output.code.size()
+                            << " max_depth=" << kNonMonotoneMaxDepth
+                            << " beam_width=" << kNonMonotoneBeamWidth
+                            << " max_red_length=" << kNonMonotoneMaxRedLength
+                            << " max_total_green_tests=" << kNonMonotoneMaxTotalGreenTests;
+                    emit_progress(run_options, message.str());
+                }
+                const NonMonotoneSearchResult non_monotone =
+                    find_non_monotone_reduction(
+                        output.code,
+                        output.crossingless_components,
+                        run_options);
+                output.tested_red_paths += non_monotone.tested_red_paths;
+                output.tested_green_paths += non_monotone.tested_green_paths;
+                {
+                    std::ostringstream message;
+                    message << "round " << round
+                            << " non_monotone_done found=" << (non_monotone.found ? "yes" : "no")
+                            << " depth=" << non_monotone.depth
+                            << " steps=" << non_monotone.steps.size()
+                            << " tested_red=" << non_monotone.tested_red_paths
+                            << " tested_green=" << non_monotone.tested_green_paths
+                            << " applied_candidates=" << non_monotone.applied_candidates
+                            << " generated_states=" << non_monotone.generated_states
+                            << " final_crossings="
+                            << (non_monotone.found ? non_monotone.code.size() : output.code.size())
+                            << " r1_moves=" << non_monotone.reidemeister_i_moves
+                            << " r2_moves=" << non_monotone.reidemeister_ii_moves
+                            << " r3_moves=" << non_monotone.reidemeister_iii_moves
+                            << " nugatory_moves=" << non_monotone.nugatory_crossing_moves;
+                    emit_progress(run_options, message.str());
+                }
+                if (non_monotone.found) {
+                    for (const NonMonotoneStep& step : non_monotone.steps) {
+                        if (reduction_round >= 0 &&
+                            output.mid_simplification_rounds >= reduction_round) {
+                            break;
+                        }
+                        const int step_round = output.mid_simplification_rounds + 1;
+                        const std::size_t before_step_crossings = output.code.size();
+                        ++output.mid_simplification_rounds;
+                        output.code = canonical_output_code(step.code);
+                        output.crossingless_components = step.crossingless_components;
+                        output.reidemeister_i_moves += step.reidemeister_i_moves;
+                        output.reidemeister_ii_moves += step.reidemeister_ii_moves;
+                        output.reidemeister_iii_moves += step.reidemeister_iii_moves;
+                        output.nugatory_crossing_moves += step.nugatory_crossing_moves;
+                        seen_reduction_states.insert(format_final_pd_code(output.code));
+                        if (output.code.size() < best_code.size()) {
+                            best_code = output.code;
+                            best_crossingless_components = output.crossingless_components;
+                        }
+                        emit_step_pd(run_options, step_round, output.code);
+                        {
+                            std::ostringstream message;
+                            message << "round " << step_round
+                                    << " non_monotone_applied kind=" << step.kind
+                                    << " crossings=" << before_step_crossings
+                                    << " -> " << output.code.size()
+                                    << " red_length=" << step.red_length
+                                    << " green_length=" << step.green_length
+                                    << " crossingless_components=" << output.crossingless_components
+                                    << " r1_moves=" << step.reidemeister_i_moves
+                                    << " r2_moves=" << step.reidemeister_ii_moves
+                                    << " r3_moves=" << step.reidemeister_iii_moves
+                                    << " nugatory_moves=" << step.nugatory_crossing_moves;
+                            emit_progress(run_options, message.str());
+                        }
+                    }
+                    continue;
+                }
+
                 SimplifierOptions brute_options = run_options;
                 brute_options.max_paths = -1;
                 brute_options.ban_heuristic = true;
@@ -3187,11 +4076,24 @@ ReductionResult reduce_pd_code(
                             << " max_states=" << kR3FailoverMaxStates;
                     emit_progress(run_options, message.str());
                 }
-                const ReidemeisterIIIFailoverResult r3 =
-                    find_reidemeister_iii_failover(
+                ReidemeisterIIIFailoverResult r3;
+                try {
+                    const SimplifierOptions r3_options =
+                        with_time_slice(run_options, kR3FailoverTimeSliceSeconds);
+                    r3 = find_reidemeister_iii_failover(
                         output.code,
                         output.crossingless_components,
-                        run_options);
+                        r3_options);
+                } catch (const TimeoutError&) {
+                    if (timeout_expired(run_options)) {
+                        throw;
+                    }
+                    std::ostringstream timeout_message;
+                    timeout_message << "round " << round
+                                    << " r3_failover_timeout seconds="
+                                    << kR3FailoverTimeSliceSeconds;
+                    emit_progress(run_options, timeout_message.str());
+                }
                 {
                     std::ostringstream message;
                     message << "round " << round
@@ -3208,6 +4110,11 @@ ReductionResult reduce_pd_code(
                 if (r3.found) {
                     output.code = canonical_output_code(r3.code);
                     output.crossingless_components = r3.crossingless_components;
+                    seen_reduction_states.insert(format_final_pd_code(output.code));
+                    if (output.code.size() < best_code.size()) {
+                        best_code = output.code;
+                        best_crossingless_components = output.crossingless_components;
+                    }
                     output.reidemeister_i_moves += r3.reidemeister_i_moves;
                     output.reidemeister_ii_moves += r3.reidemeister_ii_moves;
                     output.reidemeister_iii_moves += r3.reidemeister_iii_moves;
@@ -3234,9 +4141,14 @@ ReductionResult reduce_pd_code(
             output.crossingless_components = applied.crossingless_components;
             check_timeout(run_options);
             const PDSimplificationResult simplified =
-                simplify_pd_code(output.code, output.crossingless_components);
+                simplify_pd_code_checked(output.code, output.crossingless_components, &run_options);
             output.code = canonical_output_code(simplified.code);
             output.crossingless_components = simplified.crossingless_components;
+            seen_reduction_states.insert(format_final_pd_code(output.code));
+            if (output.code.size() < best_code.size()) {
+                best_code = output.code;
+                best_crossingless_components = output.crossingless_components;
+            }
             output.reidemeister_i_moves += simplified.reidemeister_i_moves;
             output.reidemeister_ii_moves += simplified.reidemeister_ii_moves;
             output.nugatory_crossing_moves += simplified.nugatory_crossing_moves;
@@ -3256,6 +4168,10 @@ ReductionResult reduce_pd_code(
         }
     } catch (const TimeoutError& error) {
         output.timed_out = true;
+        if (best_code.size() < output.code.size()) {
+            output.code = best_code;
+            output.crossingless_components = best_crossingless_components;
+        }
         {
             std::ostringstream message;
             message << error.what()

@@ -742,6 +742,15 @@ def possible_red_lines(diagram: Diagram) -> List[List[Endpoint]]:
             continue
         for i in range(len(line) - 2):
             candidates.append(line[: len(line) - i])
+    candidates.sort(
+        key=lambda line: (
+            len(line),
+            line[0].crossing,
+            line[0].strand,
+            line[-1].crossing,
+            line[-1].strand,
+        )
+    )
     return candidates
 
 
@@ -1249,12 +1258,16 @@ def apply_reidemeister_iii_move(code: PDCode, move: ReidemeisterIIIMove) -> PDCo
 def simplify_pd_code(
     code: PDCode,
     known_crossingless_components: int = 0,
+    timeout: int = -1,
+    deadline: Optional[float] = None,
 ) -> PDSimplificationResult:
+    check_timeout(timeout, deadline)
     result = PDSimplificationResult(
         code=_canonical_output_code([tuple(crossing) for crossing in code]),
         crossingless_components=known_crossingless_components,
     )
     while True:
+        check_timeout(timeout, deadline)
         result.code, result.crossingless_components, r1_delta = erase_r1_moves(
             result.code,
             result.crossingless_components,
@@ -1263,6 +1276,7 @@ def simplify_pd_code(
         if r1_delta:
             continue
 
+        check_timeout(timeout, deadline)
         r2_move = find_reidemeister_ii_move(result.code)
         if r2_move is not None:
             result.code, result.crossingless_components = erase_one_reidemeister_ii_move(
@@ -1273,6 +1287,7 @@ def simplify_pd_code(
             result.reidemeister_ii_moves += 1
             continue
 
+        check_timeout(timeout, deadline)
         index = find_nugatory_crossing(result.code)
         if index < 0:
             break
@@ -1329,7 +1344,7 @@ def find_reidemeister_iii_failover(
         for move in possible_reidemeister_iii_moves(state_code):
             check_timeout(timeout, deadline)
             moved = apply_reidemeister_iii_move(state_code, move)
-            simplified = simplify_pd_code(moved, state_crossingless)
+            simplified = simplify_pd_code(moved, state_crossingless, timeout, deadline)
             if len(simplified.code) < target_crossings:
                 result.found = True
                 result.code = _canonical_output_code(simplified.code)
@@ -1407,6 +1422,9 @@ _PARALLEL_BRUTE_BUDGET_USED: Any = None
 _PARALLEL_BRUTE_BUDGET_LOCK: Any = None
 _PARALLEL_TIMEOUT = -1
 _PARALLEL_TIMEOUT_DEADLINE: Optional[float] = None
+_PARALLEL_MAX_PATHS = -1
+_PARALLEL_BAN_HEURISTIC = True
+_PARALLEL_PATH_SEARCH_MODE = "bruteforce"
 
 
 def _parallel_bruteforce_initializer(
@@ -1420,6 +1438,9 @@ def _parallel_bruteforce_initializer(
     budget_lock: Any,
     timeout: int,
     deadline: Optional[float],
+    max_paths: int,
+    ban_heuristic: bool,
+    path_search_mode: str,
 ) -> None:
     global _PARALLEL_CODE
     global _PARALLEL_DIAGRAM
@@ -1433,6 +1454,9 @@ def _parallel_bruteforce_initializer(
     global _PARALLEL_BRUTE_BUDGET_LOCK
     global _PARALLEL_TIMEOUT
     global _PARALLEL_TIMEOUT_DEADLINE
+    global _PARALLEL_MAX_PATHS
+    global _PARALLEL_BAN_HEURISTIC
+    global _PARALLEL_PATH_SEARCH_MODE
 
     _PARALLEL_CODE = code
     check_timeout(timeout, deadline)
@@ -1448,6 +1472,9 @@ def _parallel_bruteforce_initializer(
     _PARALLEL_BRUTE_BUDGET_LOCK = budget_lock
     _PARALLEL_TIMEOUT = timeout
     _PARALLEL_TIMEOUT_DEADLINE = deadline
+    _PARALLEL_MAX_PATHS = max_paths
+    _PARALLEL_BAN_HEURISTIC = ban_heuristic
+    _PARALLEL_PATH_SEARCH_MODE = path_search_mode
 
 
 def _parallel_should_skip(red_index: int) -> bool:
@@ -2101,7 +2128,7 @@ def search_single_red_path(
     return outcome
 
 
-def _parallel_bruteforce_worker(red_index: int) -> RedPathSearchOutcome:
+def _parallel_red_path_worker(red_index: int) -> RedPathSearchOutcome:
     check_timeout(_PARALLEL_TIMEOUT, _PARALLEL_TIMEOUT_DEADLINE)
     if (
         _PARALLEL_CODE is None
@@ -2119,19 +2146,23 @@ def _parallel_bruteforce_worker(red_index: int) -> RedPathSearchOutcome:
         _PARALLEL_DIAGRAM,
         _PARALLEL_BASE_GRAPH,
         _PARALLEL_RED_LINES[red_index],
-        max_paths=-1,
-        ban_heuristic=True,
+        max_paths=_PARALLEL_MAX_PATHS,
+        ban_heuristic=_PARALLEL_BAN_HEURISTIC,
         require_applicable=_PARALLEL_REQUIRE_APPLICABLE,
-        path_search_mode="bruteforce",
+        path_search_mode=_PARALLEL_PATH_SEARCH_MODE,
         should_skip=lambda: _parallel_should_skip(red_index),
-        take_budget=_parallel_take_budget,
-        budget_exhausted=_parallel_budget_exhausted,
+        take_budget=_parallel_take_budget if _PARALLEL_BAN_HEURISTIC else None,
+        budget_exhausted=_parallel_budget_exhausted if _PARALLEL_BAN_HEURISTIC else None,
         timeout=_PARALLEL_TIMEOUT,
         _timeout_deadline=_PARALLEL_TIMEOUT_DEADLINE,
     )
     if outcome.found:
         _parallel_record_found(red_index)
     return outcome
+
+
+def _parallel_bruteforce_worker(red_index: int) -> RedPathSearchOutcome:
+    return _parallel_red_path_worker(red_index)
 
 
 def merge_red_path_outcomes(
@@ -2180,18 +2211,21 @@ def merge_red_path_outcomes(
     return result
 
 
-def find_simplification_parallel_bruteforce(
+def find_simplification_parallel_red_paths(
     code: PDCode,
     red_lines: List[List[Endpoint]],
     require_applicable: bool,
     worker_count: int,
+    max_paths: int,
+    ban_heuristic: bool,
+    path_search_mode: str,
     bruteforce_budget: int = DEFAULT_BRUTEFORCE_BUDGET,
     timeout: int = -1,
     _timeout_deadline: Optional[float] = None,
 ) -> SimplificationResult:
     check_timeout(timeout, _timeout_deadline)
     if not red_lines:
-        return SimplificationResult(path_search_mode="bruteforce")
+        return SimplificationResult(path_search_mode=path_search_mode)
     outcomes: List[RedPathSearchOutcome] = [
         RedPathSearchOutcome() for _ in red_lines
     ]
@@ -2216,10 +2250,13 @@ def find_simplification_parallel_bruteforce(
                     budget_lock,
                     timeout,
                     _timeout_deadline,
+                    max_paths,
+                    ban_heuristic,
+                    path_search_mode,
                 ),
             )
             futures = [
-                executor.submit(_parallel_bruteforce_worker, index)
+                executor.submit(_parallel_red_path_worker, index)
                 for index in range(len(red_lines))
             ]
             for index, future in enumerate(futures):
@@ -2240,7 +2277,30 @@ def find_simplification_parallel_bruteforce(
         finally:
             if executor is not None:
                 executor.shutdown(wait=True, cancel_futures=True)
-    return merge_red_path_outcomes(outcomes, "bruteforce")
+    return merge_red_path_outcomes(outcomes, path_search_mode)
+
+
+def find_simplification_parallel_bruteforce(
+    code: PDCode,
+    red_lines: List[List[Endpoint]],
+    require_applicable: bool,
+    worker_count: int,
+    bruteforce_budget: int = DEFAULT_BRUTEFORCE_BUDGET,
+    timeout: int = -1,
+    _timeout_deadline: Optional[float] = None,
+) -> SimplificationResult:
+    return find_simplification_parallel_red_paths(
+        code,
+        red_lines,
+        require_applicable,
+        worker_count,
+        -1,
+        True,
+        "bruteforce",
+        bruteforce_budget,
+        timeout,
+        _timeout_deadline,
+    )
 
 
 def find_simplification(
@@ -2273,24 +2333,37 @@ def find_simplification(
     check_timeout(timeout, deadline)
     red_lines = possible_red_lines(diagram)
     check_timeout(timeout, deadline)
-    if max_paths == -1 and ban_heuristic:
+    if max_paths == -1:
         worker_count = selected_bruteforce_worker_count(max_thread, len(red_lines))
         if max_thread == -1:
             _emit_progress(
                 verbose,
                 progress,
                 (
-                    f"bruteforce_threads max_thread=-1 "
+                    f"{result.path_search_mode}_threads max_thread=-1 "
+                    f"actual_threads={worker_count} red_paths={len(red_lines)} "
+                    f"bruteforce_budget={bruteforce_budget}"
+                ),
+            )
+        elif worker_count > 1:
+            _emit_progress(
+                verbose,
+                progress,
+                (
+                    f"{result.path_search_mode}_threads max_thread={max_thread} "
                     f"actual_threads={worker_count} red_paths={len(red_lines)} "
                     f"bruteforce_budget={bruteforce_budget}"
                 ),
             )
         if worker_count > 1:
-            return find_simplification_parallel_bruteforce(
+            return find_simplification_parallel_red_paths(
                 code,
                 red_lines,
                 require_applicable,
                 worker_count,
+                max_paths,
+                ban_heuristic,
+                result.path_search_mode,
                 bruteforce_budget,
                 timeout,
                 deadline,
@@ -2301,8 +2374,19 @@ def find_simplification(
         if max_paths == -1 and ban_heuristic
         else None
     )
-    for red_path in red_lines:
+    for red_index, red_path in enumerate(red_lines):
         check_timeout(timeout, deadline)
+        if verbose and (red_index == 0 or red_index % 1024 == 0):
+            _emit_progress(
+                verbose,
+                progress,
+                (
+                    f"search_progress mode={result.path_search_mode} "
+                    f"red_index={red_index} red_paths={len(red_lines)} "
+                    f"red_length={len(red_path)} "
+                    f"tested_green={result.tested_green_paths}"
+                ),
+            )
         result.tested_red_paths += 1
         outcome = search_single_red_path(
             code,
@@ -2587,7 +2671,7 @@ def reduce_pd_code(
                 f"heuristic={'off' if ban_heuristic else 'on'}"
             ),
         )
-        prepared = simplify_pd_code(code, known_crossingless_components)
+        prepared = simplify_pd_code(code, known_crossingless_components, timeout, deadline)
         output.code = _canonical_output_code(prepared.code)
         output.crossingless_components = prepared.crossingless_components
         output.reidemeister_i_moves = prepared.reidemeister_i_moves
@@ -2811,7 +2895,7 @@ def reduce_pd_code(
             output.code = reduced_code
             output.crossingless_components = reduced_crossingless
             check_timeout(timeout, deadline)
-            prepared = simplify_pd_code(output.code, output.crossingless_components)
+            prepared = simplify_pd_code(output.code, output.crossingless_components, timeout, deadline)
             output.code = _canonical_output_code(prepared.code)
             output.crossingless_components = prepared.crossingless_components
             output.reidemeister_i_moves += prepared.reidemeister_i_moves
