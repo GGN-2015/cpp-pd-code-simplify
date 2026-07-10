@@ -75,16 +75,15 @@ normalization is applied at the final JSON boundary; the C++ backend keeps its
 internal numbering unchanged while simplifying.
 
 `max_paths=-1` is the default and enables deterministic heuristic green-path
-sampling in the C++ backend. Heuristic mode tries longer red arcs first, scores
-validated witnesses by the actual crossing reduction obtained after temporary
-application, and uses a fixed bounded lookahead before applying the best
-candidate. Pass `ban_heuristic=True` to request exhaustive green-path
-enumeration for the same input. `reduction_round=-1` is the default and applies
-mid-simplification witnesses until stable. In the default heuristic mode, the
-C++ backend adaptively orders `r3_prepass`, `heuristic_search`, and
-`non_monotone` from deterministic success, miss, and soft-timeout counters. If
-all adaptive stages miss, the backend runs a brute-force proof pass and finally
-the RIII failover before a diagram is treated as stable. Pass
+sampling in the C++ backend. Heuristic mode preserves the original prototype
+red-path order and applies the first validated witness found in that round. Pass
+`ban_heuristic=True` to request exhaustive green-path enumeration for the same
+input. `reduction_round=-1` is the default and applies mid-simplification
+witnesses until stable. In the default heuristic mode, the backend keeps the
+prototype-compatible internal PD order while heuristic search keeps succeeding.
+If heuristic search misses, the current diagram is canonicalized at the
+non-heuristic handoff boundary before `r3_prepass`, `non_monotone`, brute force,
+and the final RIII failover are tried as needed. Pass
 `timeout=K` to cap a call at `K` seconds; the default `-1` has no timeout. Pass
 `verbose=True` to forward timestamped C++ progress logs to stderr. If a call
 exceeds its timeout, the returned dictionary still contains the best PD code

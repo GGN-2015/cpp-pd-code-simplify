@@ -36,19 +36,21 @@ also has a separate safety budget: `--bruteforce-budget 200000` by default,
 or `--bruteforce-budget -1` for no budget. Budget exhaustion returns the
 current best PD code with `resource_limited=true`.
 
-In the full high-level reduction loop, heuristic search is one adaptive stage
-beside the small RIII prepass and the deterministic non-monotone failover
-described in [Algorithm and Correctness](algorithm-and-correctness.md). The
-stage order is recalculated each round from deterministic success, miss, and
-soft-timeout counters. If every adaptive stage misses, the simplifier runs the
-brute-force proof pass.
+In the full high-level reduction loop, heuristic search is tried first in every
+default round. If it succeeds, the next round returns immediately to heuristic
+search. If it misses, the current PD code is canonicalized and handed to the
+small RIII prepass, the deterministic non-monotone failover, and finally the
+brute-force proof pass described in
+[Algorithm and Correctness](algorithm-and-correctness.md).
 
 ## Scoring
 
-Before green paths are sampled, heuristic mode orders red paths by decreasing
-length, then by endpoint indices. This keeps the search deterministic while
-trying high-potential red arcs before short arcs that can only remove a small
-number of crossings.
+Before green paths are sampled, heuristic mode keeps red paths in the original
+prototype generation order. The simplifier also keeps the internal PD row and
+label order in a prototype-compatible form while heuristic witnesses keep
+succeeding. This looks less greedy than sorting by apparent red-path length, but
+it is deliberate: on some hard diagrams, the useful large witness is only
+exposed after many earlier legacy first-hit steps.
 
 For each source-target face pair, the heuristic first computes a reverse
 breadth-first distance from every face to the target. This distance ignores
@@ -86,19 +88,17 @@ The first two keys prefer short and low-weight paths. The branch penalty keeps
 the search from spending all budget inside a single locally dense area. The
 serial number makes the result reproducible across platforms.
 
-The sampler does not apply the first valid witness immediately. For each red
-path, every sampled green path that passes validation is applied to a temporary
-PD code, and the candidate is scored by the actual crossing reduction
-`old_crossings - temporary_crossings`. The best candidate wins; ties are broken
-by smaller output crossing count, longer red path, shorter green path, and then
-the deterministic generation order.
+For a red path in default heuristic mode, sampled green paths are streamed
+through the usual witness validator and temporary PD application. The first
+validated witness is returned immediately. This is the legacy first-hit rule
+shared by the C++ implementation, the Python prototype, and the Python C++
+interface.
 
-In multi-threaded heuristic mode, red paths are processed in fixed batches of
-at most the selected worker count. Once a batch finds a valid witness, the
-search continues for a bounded lookahead window and still applies the best
-actual crossing reduction seen in that window. This recovers large-step
-simplifications that are easy to miss with "first witness wins" behavior while
-keeping the search finite.
+When `max_paths` is set to a finite positive value, the bounded non-default
+search still scores validated candidates inside one red path by actual crossing
+reduction before selecting a witness. Exhaustive brute-force mode
+(`--max-paths -1 --ban-heuristic`) streams red paths in parallel when multiple
+threads are available.
 
 ## Fixed Budgets
 
@@ -119,8 +119,10 @@ state_budget = clamp(face_count * cutoff * 8, 128, 4096)
 path_budget  = clamp(face_count * 2 + cutoff * 8, 24, 384)
 ```
 
-These budgets are not inferred from `max_paths`. They are part of the
-heuristic search mode itself.
+These budgets are not inferred from `max_paths`. They are part of the heuristic
+search mode itself. The historical best-witness lookahead constant is retained
+for source compatibility, but default heuristic mode now follows the original
+prototype first-hit rule instead of the lookahead scorer.
 
 ## Validation And Correctness
 

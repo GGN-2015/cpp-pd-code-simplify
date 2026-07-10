@@ -456,7 +456,11 @@ PDCode renumber_r1_order(PDCode code) {
     return code;
 }
 
-PDCode erase_r1_moves(PDCode code, std::size_t& crossingless_components, int& moves) {
+PDCode erase_r1_moves(
+    PDCode code,
+    std::size_t& crossingless_components,
+    int& moves,
+    bool canonicalize_result = true) {
     if (!code.empty()) {
         build_label_map(code);
     }
@@ -485,7 +489,9 @@ PDCode erase_r1_moves(PDCode code, std::size_t& crossingless_components, int& mo
             }
 
             crossingless_components = after_removal.crossingless_components;
-            code = canonical_output_code(code);
+            if (canonicalize_result) {
+                code = canonical_output_code(code);
+            }
             ++moves;
             changed = true;
             break;
@@ -496,7 +502,8 @@ PDCode erase_r1_moves(PDCode code, std::size_t& crossingless_components, int& mo
         }
     }
 
-    return canonical_output_code(renumber_r1_order(code));
+    const PDCode renumbered = renumber_r1_order(code);
+    return canonicalize_result ? canonical_output_code(renumbered) : renumbered;
 }
 
 std::map<int, std::set<int>> base_pd_graph(const PDCode& code) {
@@ -671,7 +678,8 @@ PDCode erase_one_nugatory_crossing(
     PDCode code,
     int crossing_index,
     std::size_t& crossingless_components,
-    int& moves) {
+    int& moves,
+    bool canonicalize_result = true) {
     if (unique_label_count(code[crossing_index]) != 4) {
         throw std::runtime_error("Nugatory erase requires an R1-free PD code");
     }
@@ -716,7 +724,8 @@ PDCode erase_one_nugatory_crossing(
     code = replace_arc_value(code, dx, bx);
     crossingless_components = after_removal.crossingless_components;
     ++moves;
-    return canonical_output_code(renumber_full_dfs(code));
+    const PDCode renumbered = renumber_full_dfs(code);
+    return canonicalize_result ? canonical_output_code(renumbered) : renumbered;
 }
 
 std::vector<int> endpoint_pairing(const PDCode& code) {
@@ -1505,21 +1514,6 @@ std::vector<std::vector<Endpoint>> possible_red_lines(const Diagram& diagram) {
             candidates.emplace_back(line.begin(), line.end() - static_cast<std::ptrdiff_t>(i));
         }
     }
-    std::sort(candidates.begin(), candidates.end(), [](const auto& lhs, const auto& rhs) {
-        if (lhs.size() != rhs.size()) {
-            return lhs.size() < rhs.size();
-        }
-        if (lhs.front().crossing != rhs.front().crossing) {
-            return lhs.front().crossing < rhs.front().crossing;
-        }
-        if (lhs.front().strand != rhs.front().strand) {
-            return lhs.front().strand < rhs.front().strand;
-        }
-        if (lhs.back().crossing != rhs.back().crossing) {
-            return lhs.back().crossing < rhs.back().crossing;
-        }
-        return lhs.back().strand < rhs.back().strand;
-    });
     return candidates;
 }
 
@@ -3740,12 +3734,14 @@ inline RandomInflationResult randomly_increase_crossings(
 inline PDSimplificationResult simplify_pd_code_checked(
     const PDCode& code,
     std::size_t known_crossingless_components,
-    const SimplifierOptions* options) {
+    const SimplifierOptions* options,
+    bool allow_reidemeister_ii = true,
+    bool canonicalize_input = true) {
     if (options != nullptr) {
         check_timeout(*options);
     }
     PDSimplificationResult result;
-    result.code = canonical_output_code(code);
+    result.code = canonicalize_input ? canonical_output_code(code) : code;
     result.crossingless_components = known_crossingless_components;
 
     while (true) {
@@ -3756,22 +3752,25 @@ inline PDSimplificationResult simplify_pd_code_checked(
         result.code = erase_r1_moves(
             result.code,
             result.crossingless_components,
-            result.reidemeister_i_moves);
+            result.reidemeister_i_moves,
+            canonicalize_input);
         if (result.reidemeister_i_moves != r1_before) {
             continue;
         }
 
-        if (options != nullptr) {
-            check_timeout(*options);
-        }
-        const ReidemeisterIIMove r2_move = find_reidemeister_ii_move(result.code);
-        if (r2_move.found) {
-            result.code = erase_one_reidemeister_ii_move(
-                result.code,
-                r2_move,
-                result.crossingless_components,
-                result.reidemeister_ii_moves);
-            continue;
+        if (allow_reidemeister_ii) {
+            if (options != nullptr) {
+                check_timeout(*options);
+            }
+            const ReidemeisterIIMove r2_move = find_reidemeister_ii_move(result.code);
+            if (r2_move.found) {
+                result.code = erase_one_reidemeister_ii_move(
+                    result.code,
+                    r2_move,
+                    result.crossingless_components,
+                    result.reidemeister_ii_moves);
+                continue;
+            }
         }
 
         if (options != nullptr) {
@@ -3785,7 +3784,8 @@ inline PDSimplificationResult simplify_pd_code_checked(
             result.code,
             crossing_index,
             result.crossingless_components,
-            result.nugatory_crossing_moves);
+            result.nugatory_crossing_moves,
+            canonicalize_input);
     }
 
     return result;
@@ -4607,8 +4607,7 @@ RedPathSearchOutcome search_single_red_path(
     }
 
     const int cutoff = static_cast<int>(red_path.size()) - 1;
-    const bool choose_best_within_red =
-        !(options.max_paths == -1 && options.ban_heuristic);
+    const bool choose_best_within_red = options.max_paths != -1;
 
     auto consider_candidate = [&](SimplificationResult& candidate) {
         candidate.path_search_mode = path_search_mode;
@@ -4996,24 +4995,12 @@ inline SimplificationResult find_simplification(
     auto red_lines = possible_red_lines(diagram);
     const bool heuristic_mode = run_options.max_paths == -1 && !run_options.ban_heuristic;
     if (heuristic_mode) {
-        std::stable_sort(red_lines.begin(), red_lines.end(), [](const auto& lhs, const auto& rhs) {
-            if (lhs.size() != rhs.size()) {
-                return lhs.size() > rhs.size();
-            }
-            if (lhs.front().crossing != rhs.front().crossing) {
-                return lhs.front().crossing < rhs.front().crossing;
-            }
-            if (lhs.front().strand != rhs.front().strand) {
-                return lhs.front().strand < rhs.front().strand;
-            }
-            if (lhs.back().crossing != rhs.back().crossing) {
-                return lhs.back().crossing < rhs.back().crossing;
-            }
-            return lhs.back().strand < rhs.back().strand;
-        });
+        std::ostringstream message;
+        message << "heuristic_legacy first_hit=yes red_paths=" << red_lines.size();
+        emit_progress(run_options, message.str());
     }
     check_timeout(run_options);
-    const bool parallel_red_path_mode = run_options.max_paths == -1;
+    const bool parallel_red_path_mode = run_options.max_paths == -1 && !heuristic_mode;
     const bool brute_force_mode = parallel_red_path_mode && run_options.ban_heuristic;
     const int worker_count = parallel_red_path_mode
         ? selected_bruteforce_worker_count(
@@ -5060,9 +5047,6 @@ inline SimplificationResult find_simplification(
             brute_budget_ptr);
     }
 
-    SimplificationResult best_witness;
-    best_witness.path_search_mode = result.path_search_mode;
-    int red_paths_since_best = 0;
     for (std::size_t red_index = 0; red_index < red_lines.size(); ++red_index) {
         const auto& red_path = red_lines[red_index];
         check_timeout(run_options);
@@ -5097,41 +5081,10 @@ inline SimplificationResult find_simplification(
             found.tested_red_paths = result.tested_red_paths;
             found.tested_green_paths = result.tested_green_paths;
             found.resource_limited = outcome.resource_limited;
-            if (heuristic_mode) {
-                if (witness_better_than(found, best_witness)) {
-                    best_witness = found;
-                    red_paths_since_best = 0;
-                } else if (best_witness.found) {
-                    ++red_paths_since_best;
-                }
-                if (best_witness.found &&
-                    red_paths_since_best >= kHeuristicBestLookaheadBatches) {
-                    best_witness.tested_red_paths = result.tested_red_paths;
-                    best_witness.tested_green_paths = result.tested_green_paths;
-                    best_witness.resource_limited = result.resource_limited;
-                    return best_witness;
-                }
-                continue;
-            }
             return found;
-        }
-        if (heuristic_mode && best_witness.found) {
-            ++red_paths_since_best;
-            if (red_paths_since_best >= kHeuristicBestLookaheadBatches) {
-                best_witness.tested_red_paths = result.tested_red_paths;
-                best_witness.tested_green_paths = result.tested_green_paths;
-                best_witness.resource_limited = result.resource_limited;
-                return best_witness;
-            }
         }
     }
 
-    if (heuristic_mode && best_witness.found) {
-        best_witness.tested_red_paths = result.tested_red_paths;
-        best_witness.tested_green_paths = result.tested_green_paths;
-        best_witness.resource_limited = result.resource_limited;
-        return best_witness;
-    }
     return result;
 }
 
@@ -5319,6 +5272,8 @@ inline ReductionResult reduce_pd_code(
 
     try {
         check_timeout(run_options);
+        const bool top_level_heuristic_mode =
+            run_options.max_paths == -1 && !run_options.ban_heuristic;
         {
             std::ostringstream message;
             message << "start input_crossings=" << code.size()
@@ -5336,8 +5291,15 @@ inline ReductionResult reduce_pd_code(
         }
 
         const PDSimplificationResult prepared =
-            simplify_pd_code_checked(code, known_crossingless_components, &run_options);
-        output.code = canonical_output_code(prepared.code);
+            simplify_pd_code_checked(
+                code,
+                known_crossingless_components,
+                &run_options,
+                !top_level_heuristic_mode,
+                !top_level_heuristic_mode);
+        output.code = top_level_heuristic_mode
+            ? prepared.code
+            : canonical_output_code(prepared.code);
         output.crossingless_components = prepared.crossingless_components;
         output.reidemeister_i_moves = prepared.reidemeister_i_moves;
         output.reidemeister_ii_moves = prepared.reidemeister_ii_moves;
@@ -5437,6 +5399,7 @@ inline ReductionResult reduce_pd_code(
                 }
                 ReidemeisterIIIFailoverResult r3_prepass;
                 bool stage_timeout = false;
+                bool stage_error = false;
                 try {
                     const SimplifierOptions r3_options =
                         with_time_slice(run_options, kR3PrepassTimeSliceSeconds);
@@ -5456,6 +5419,13 @@ inline ReductionResult reduce_pd_code(
                                     << " r3_prepass_timeout seconds="
                                     << kR3PrepassTimeSliceSeconds;
                     emit_progress(run_options, timeout_message.str());
+                } catch (const std::exception& error) {
+                    stage_error = true;
+                    std::ostringstream error_message;
+                    error_message << "round " << round
+                                  << " r3_prepass_error message=\""
+                                  << error.what() << "\"";
+                    emit_progress(run_options, error_message.str());
                 }
                 {
                     std::ostringstream message;
@@ -5473,6 +5443,10 @@ inline ReductionResult reduce_pd_code(
                 }
                 if (stage_timeout) {
                     record_adaptive_stage_timeout(adaptive_scheduler, AdaptiveStage::R3Prepass);
+                    return false;
+                }
+                if (stage_error) {
+                    record_adaptive_stage_miss(adaptive_scheduler, AdaptiveStage::R3Prepass);
                     return false;
                 }
                 if (r3_prepass.found) {
@@ -5499,7 +5473,7 @@ inline ReductionResult reduce_pd_code(
                 return false;
             };
 
-            auto run_heuristic_search = [&]() {
+            auto run_heuristic_search = [&](bool use_soft_slice) {
                 SimplifierOptions search_options = run_options;
                 search_options.require_applicable = true;
                 output.last_path_search_mode = search_mode_for_options(search_options);
@@ -5508,19 +5482,21 @@ inline ReductionResult reduce_pd_code(
                     message << "round " << round
                             << " search_start crossings=" << output.code.size()
                             << " mode=" << output.last_path_search_mode
-                            << " max_thread=" << search_options.max_threads;
+                            << " max_thread=" << search_options.max_threads
+                            << " soft_slice="
+                            << (use_soft_slice ? kMidSearchTimeSliceSeconds : -1);
                     emit_progress(run_options, message.str());
                 }
                 bool stage_timeout = false;
                 try {
                     SimplifierOptions sliced_search_options = search_options;
-                    if (adaptive_mode) {
+                    if (adaptive_mode && use_soft_slice) {
                         sliced_search_options =
                             with_time_slice(search_options, kMidSearchTimeSliceSeconds);
                     }
                     search = find_simplification(output.code, sliced_search_options);
                 } catch (const TimeoutError&) {
-                    if (timeout_expired(run_options)) {
+                    if (!use_soft_slice || timeout_expired(run_options)) {
                         throw;
                     }
                     stage_timeout = true;
@@ -5576,6 +5552,7 @@ inline ReductionResult reduce_pd_code(
                 }
                 NonMonotoneSearchResult non_monotone;
                 bool stage_timeout = false;
+                bool stage_error = false;
                 try {
                     const SimplifierOptions non_monotone_options =
                         with_time_slice(run_options, kNonMonotoneTimeSliceSeconds);
@@ -5593,6 +5570,13 @@ inline ReductionResult reduce_pd_code(
                                     << " non_monotone_timeout seconds="
                                     << kNonMonotoneTimeSliceSeconds;
                     emit_progress(run_options, timeout_message.str());
+                } catch (const std::exception& error) {
+                    stage_error = true;
+                    std::ostringstream error_message;
+                    error_message << "round " << round
+                                  << " non_monotone_error message=\""
+                                  << error.what() << "\"";
+                    emit_progress(run_options, error_message.str());
                 }
                 output.tested_red_paths += non_monotone.tested_red_paths;
                 output.tested_green_paths += non_monotone.tested_green_paths;
@@ -5616,6 +5600,10 @@ inline ReductionResult reduce_pd_code(
                 }
                 if (stage_timeout) {
                     record_adaptive_stage_timeout(adaptive_scheduler, AdaptiveStage::NonMonotone);
+                    return false;
+                }
+                if (stage_error) {
+                    record_adaptive_stage_miss(adaptive_scheduler, AdaptiveStage::NonMonotone);
                     return false;
                 }
                 if (non_monotone.found) {
@@ -5667,21 +5655,24 @@ inline ReductionResult reduce_pd_code(
             };
 
             if (adaptive_mode) {
-                const std::vector<AdaptiveStage> order =
-                    adaptive_stage_order(adaptive_scheduler);
-                emit_adaptive_scheduler_state(run_options, round, adaptive_scheduler, order);
-                for (AdaptiveStage stage : order) {
-                    if (stage == AdaptiveStage::R3Prepass) {
-                        if (run_r3_prepass()) {
-                            break;
+                if (!run_heuristic_search(false)) {
+                    output.code = canonical_output_code(output.code);
+                    emit_progress(run_options, "non_heuristic_handoff canonicalized=yes");
+                    const std::vector<AdaptiveStage> order =
+                        adaptive_stage_order(adaptive_scheduler);
+                    emit_adaptive_scheduler_state(run_options, round, adaptive_scheduler, order);
+                    for (AdaptiveStage stage : order) {
+                        if (stage == AdaptiveStage::HeuristicSearch) {
+                            continue;
                         }
-                    } else if (stage == AdaptiveStage::HeuristicSearch) {
-                        if (run_heuristic_search()) {
-                            break;
-                        }
-                    } else {
-                        if (run_non_monotone()) {
-                            break;
+                        if (stage == AdaptiveStage::R3Prepass) {
+                            if (run_r3_prepass()) {
+                                break;
+                            }
+                        } else {
+                            if (run_non_monotone()) {
+                                break;
+                            }
                         }
                     }
                 }
@@ -5692,7 +5683,7 @@ inline ReductionResult reduce_pd_code(
                     continue;
                 }
             } else {
-                (void)run_heuristic_search();
+                (void)run_heuristic_search(false);
             }
 
             if (!search.found && adaptive_mode) {
@@ -5808,15 +5799,24 @@ inline ReductionResult reduce_pd_code(
             check_timeout(run_options);
             const MidSimplificationApplyResult applied =
                 apply_simplification_witness(output.code, search, output.crossingless_components);
-            const PDCode applied_code = canonical_output_code(applied.code);
+            const bool heuristic_witness = search.path_search_mode == "heuristic";
+            const PDCode applied_code =
+                heuristic_witness ? applied.code : canonical_output_code(applied.code);
             ++output.mid_simplification_rounds;
-            emit_step_pd(run_options, round, applied_code);
+            emit_step_pd(run_options, round, canonical_output_code(applied.code));
             output.code = applied_code;
             output.crossingless_components = applied.crossingless_components;
             check_timeout(run_options);
             const PDSimplificationResult simplified =
-                simplify_pd_code_checked(output.code, output.crossingless_components, &run_options);
-            output.code = canonical_output_code(simplified.code);
+                simplify_pd_code_checked(
+                    output.code,
+                    output.crossingless_components,
+                    &run_options,
+                    !heuristic_witness,
+                    !heuristic_witness);
+            output.code = heuristic_witness
+                ? simplified.code
+                : canonical_output_code(simplified.code);
             output.crossingless_components = simplified.crossingless_components;
             seen_reduction_states.insert(format_final_pd_code(output.code));
             if (output.code.size() < best_code.size()) {
@@ -5863,6 +5863,7 @@ inline ReductionResult reduce_pd_code(
         !output.stopped_by_crossing_limit &&
         reduction_round >= 0 &&
         output.mid_simplification_rounds >= reduction_round;
+    output.code = canonical_output_code(output.code);
     {
         std::ostringstream message;
         message << "done final_crossings=" << output.code.size()

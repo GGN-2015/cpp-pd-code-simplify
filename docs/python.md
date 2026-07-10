@@ -29,13 +29,12 @@ python mid_simplify_v5.py --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 Use `--json` for structured output containing `final_pd_code` and
 `final_crossings`. Use `--reduction-round K` to cap applied
 mid-simplification rounds; the default `-1` runs until stable. In heuristic
-mode, each round adaptively orders `r3_prepass`, `heuristic_search`, and
-`non_monotone` from deterministic success, miss, and soft-timeout counters.
-If any adaptive stage reduces the diagram, the next round returns to the same
-adaptive loop. If all adaptive stages miss, a brute-force check runs before the
-current diagram is treated as stable. Every generated PD code is canonicalized
-immediately after it is produced, including after each local cleanup deletion
-and after every applied witness. Use `--timeout K` to cap each PD-code job at
+mode, each round first tries the prototype-compatible legacy first-hit
+heuristic route. While that route keeps succeeding, the internal PD row and
+label order is preserved. If heuristic search misses, the current PD code is
+canonicalized at the non-heuristic handoff boundary, then `r3_prepass`,
+`non_monotone`, brute force, and the final RIII failover are tried as needed.
+Use `--timeout K` to cap each PD-code job at
 `K` seconds; the default `-1` has no timeout. A timed-out job returns the best
 PD code found so far and sets `timed_out` in JSON/text output.
 Use `--quit-at-crossing N` to stop early once the current PD code has at most
@@ -92,11 +91,10 @@ print(result.to_json()["final_pd_code"])
 
 `find_simplification` defaults to `max_paths=-1`, which uses deterministic
 heuristic green-path sampling. Pass `ban_heuristic=True` with `max_paths=-1`
-to enumerate all green paths for a manageable input. Heuristic mode tries
-longer red arcs first, scores validated witnesses by the actual crossing
-reduction obtained after temporary application, and uses a fixed bounded
-lookahead before applying the best candidate. `reduce_pd_code` is the high-level
-API that applies witnesses and returns the internal final PD code.
+to enumerate all green paths for a manageable input. Default heuristic mode
+keeps the original prototype red-path order and returns the first validated
+witness found in the current round. `reduce_pd_code` is the high-level API that
+applies witnesses and returns the internal final PD code.
 The Python prototype uses the same deterministic non-monotone failover as the
 C++ implementation; repeated no-timeout searches inside one Python process
 cache exact search results for identical canonical PD codes and search

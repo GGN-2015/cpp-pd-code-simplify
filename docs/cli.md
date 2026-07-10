@@ -111,12 +111,12 @@ component.
 ```
 
 `--max-paths -1` is the default. In that mode the executable uses deterministic
-heuristic green-path sampling. Heuristic mode orders longer red arcs first,
-scores validated witnesses by the actual crossing reduction obtained after
-temporarily applying them, and uses a fixed bounded lookahead before choosing
-which witness to apply. Add `--ban-heuristic` to run exhaustive green-path
-enumeration instead. If `--max-paths` is any other integer, the legacy bounded
-DFS ordering is used.
+heuristic green-path sampling. Heuristic mode preserves the original prototype
+red-path generation order and applies the first validated witness found for that
+round. This legacy first-hit order is intentional: some hard diagrams need many
+small legacy steps before a later large crossing drop becomes visible. Add
+`--ban-heuristic` to run exhaustive green-path enumeration instead. If
+`--max-paths` is any other integer, the bounded DFS ordering is used.
 
 Brute-force green-path enumeration is streamed: each candidate path is checked
 as soon as it is generated, so the implementation does not keep the full set of
@@ -128,19 +128,23 @@ sets `resource_limited: true`.
 
 `--reduction-round -1` is the default. It repeatedly applies valid
 mid-simplification witnesses. Use `--reduction-round K` to cap the number of
-applied mid-simplification rounds. Every generated PD code is canonicalized
-immediately after it is produced, including after each local cleanup deletion
-and after every applied witness. In default heuristic mode, each round uses an
-adaptive deterministic scheduler over `r3_prepass`, `heuristic_search`, and
-`non_monotone`. Productive stages gain priority; misses and soft stage timeouts
-lower priority. If one of these stages reduces the diagram, the result is
-applied and the next round starts again from the canonical PD code. If all
-adaptive stages miss, the executable runs a brute-force enumeration pass. If
-brute force finds a witness, that witness is applied and the next round starts
-again in heuristic mode. A diagram is treated as stable only after the adaptive
-stages, brute force, and the final RIII failover all fail on the
-already-canonical current state. Verbose mode prints the current
-`adaptive_order` and per-stage scores each round.
+applied mid-simplification rounds. Final JSON/text PD codes and
+`--show-step-pd` output are canonicalized. In default heuristic mode, the
+internal PD order is kept in the prototype-compatible form while heuristic
+witnesses keep succeeding. When heuristic search misses and the program hands
+the current diagram to RIII prepass, non-monotone failover, brute force, or the
+final RIII failover, the current PD code is canonicalized first.
+
+Each default round tries the legacy heuristic search first. If it succeeds, the
+next round returns to heuristic search. If it misses, the executable uses a
+deterministic adaptive scheduler for `r3_prepass` and `non_monotone`.
+Productive helper stages gain priority; misses and soft stage timeouts lower
+priority. If a helper stage reduces the diagram, the result is applied and the
+next round starts again from heuristic mode. If all helper stages miss, the
+executable runs a brute-force enumeration pass. A diagram is treated as stable
+only after heuristic search, helper stages, brute force, and the final RIII
+failover all fail on the canonical handoff state. Verbose mode prints
+`non_heuristic_handoff`, `adaptive_order`, and per-stage scores.
 Verbose log lines are prefixed with local wall-clock time in
 `YYYY-MM-DD HH:MM:SS` format. When `--max-thread -1` reaches a brute-force
 search phase, verbose logs also include `actual_threads`, the worker count

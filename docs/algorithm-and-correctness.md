@@ -156,36 +156,37 @@ R2, and nugatory preprocessing again. This can expose additional local
 simplifications before the next mid-simplification search round.
 
 `--reduction-round K` caps the number of applied mid-simplification rounds.
-After every operation that produces a new PD code, including an applied
-mid-simplification witness and each local cleanup deletion, the implementation
-immediately rebuilds the internal state from the canonical output form. This
-canonicalization relabels each component from 1, sorts crossings, and rotates
-each crossing so the displayed row starts at the under-incoming strand. It is
-not a topological move; it only prevents later searches from depending on a
-stale internal row order, edge numbering, or crossing orientation.
+Final JSON/text output and `--show-step-pd` output are always canonicalized.
+This canonicalization relabels each component from 1, sorts crossings, and
+rotates each crossing so the displayed row starts at the under-incoming strand.
+It is not a topological move. In default heuristic mode, however, the internal
+state intentionally keeps the original prototype-compatible row and label order
+while heuristic witnesses keep succeeding. This preserves legacy hard-case
+routes where a large crossing drop appears only after many earlier first-hit
+heuristic rounds.
 
 The default `--reduction-round -1` repeats until no applicable witness remains.
-In default heuristic mode, each round uses a deterministic adaptive scheduler
-over three crossing-reduction strategies: the small RIII prepass, the heuristic
-red-green search, and the deterministic non-monotone failover described below.
-Each strategy has fixed base priority, then gains priority after successes and
-loses priority after misses or soft stage timeouts. This prevents a strategy
-that keeps missing from permanently blocking later strategies, while allowing a
-strategy that is currently productive to run earlier in the next round. Ties use
-the fixed order `r3_prepass`, `heuristic_search`, `non_monotone`, so the result
-is deterministic.
+In default heuristic mode, each round first tries the legacy heuristic
+red-green search. If it lowers the crossing count, the next round immediately
+returns to heuristic search with the same prototype-compatible internal order.
+If heuristic search misses, the implementation canonicalizes the current PD code
+at the non-heuristic handoff boundary, then uses a deterministic scheduler over
+the small RIII prepass and deterministic non-monotone failover described below.
 
-The adaptive stages are tried in the current score order. If one stage lowers
-the crossing count, its result is applied, canonicalized, and the next round
-starts from the new diagram. The RIII prepass has a 15 second soft slice, the
-heuristic search has a 30 second soft slice, and non-monotone failover has a 60
-second soft slice. A soft slice only changes that stage's scheduler score; the
-global `--timeout` remains the hard job timeout. If all adaptive stages miss,
-the simplifier runs a brute-force pass from the already-canonical current
-diagram. If brute force finds a witness, that witness is applied, canonicalized,
-and the loop continues in heuristic mode. If brute force also fails, the larger
-deterministic RIII failover described below is tried before the diagram is
-reported as final.
+Each helper strategy has fixed base priority, then gains priority after
+successes and loses priority after misses or soft stage timeouts. This prevents
+a helper strategy that keeps missing from permanently blocking later helpers,
+while allowing a productive helper to run earlier after heuristic search has
+missed. The RIII prepass has a 15 second soft slice, and non-monotone failover
+has a 60 second soft slice. A soft slice only changes that stage's scheduler
+score; the global `--timeout` remains the hard job timeout.
+
+If a helper stage lowers the crossing count, its result is canonicalized and
+the next round starts again in heuristic mode. If all helper stages miss, the
+simplifier runs a brute-force pass from the canonical handoff diagram. If brute
+force finds a witness, that witness is applied, canonicalized, and the loop
+continues in heuristic mode. If brute force also fails, the larger deterministic
+RIII failover described below is tried before the diagram is reported as final.
 
 Brute-force search has a separate resource guard, `bruteforce_budget`, exposed
 as `--bruteforce-budget` in the CLIs. The default budget is `200000`
@@ -403,11 +404,11 @@ half-edge graph cannot be paired into valid PD labels. The final renumbering
 changes only labels, not the underlying diagram.
 
 Heuristic and non-monotone modes do not change this soundness argument because
-they only change candidate ordering, sampling, best-witness lookahead, and
-whether a bounded detour is searched before the terminal proof pass. Heuristic
-best-witness selection scores only witnesses that have already passed
-validation and have been applied to a temporary PD code. These modes can miss a
-useful route; they cannot make an unvalidated witness valid. Use
+they only change candidate ordering, sampling, first-hit selection, and whether
+a bounded detour is searched before the terminal proof pass. Heuristic first-hit
+selection returns only witnesses that have already passed validation and have
+been applied to a temporary PD code. These modes can miss a useful route; they
+cannot make an unvalidated witness valid. Use
 `--ban-heuristic --max-paths -1` for complete direct green-path enumeration on
 inputs where that cost is acceptable.
 
