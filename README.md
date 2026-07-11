@@ -86,6 +86,7 @@ batch-mode run that measures time and peak RSS.
 - [Packaging](docs/packaging.md)
 - [Benchmarking](docs/benchmarking.md)
 - [C++ zip-random time analysis](docs/cpp-time-analysis.md)
+- [SnapPy/Spherogram-flavor comparison](docs/snappy-flavor-comparison.md)
 - [Python and C++ comparison results](docs/python-cpp-comparison.md)
 
 ## Acknowledgements
