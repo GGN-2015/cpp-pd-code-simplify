@@ -111,14 +111,15 @@ component.
 ```
 
 `--max-paths -1` is the default. In that mode the executable uses deterministic
-heuristic green-path sampling. Heuristic mode preserves the original prototype
-red-path generation order. With one worker it applies the first validated
-witness found for that round. With multiple workers and an initial input of at
-least 500 crossings it searches deterministic red-path batches in parallel and
-chooses the validated witness with the best actual crossing reduction inside
-the batch lookahead window. Jobs that start below 500 crossings keep the legacy
-first-hit route. Add `--ban-heuristic` to run exhaustive green-path
-enumeration instead. If
+heuristic green-path sampling when the heuristic stage is reached. The whole
+default reducer first runs a 180 second efficient adaptive phase whose initial
+order is `r3_prepass`, legacy first-hit heuristic search, and `non_monotone`.
+If that phase expires before the job finishes, the current best PD code is used
+as the start of a deterministic multi-worker best-batch heuristic that chooses
+the validated witness with the best actual crossing reduction inside the batch
+lookahead window. Add `--ban-heuristic` to run exhaustive green-path
+enumeration instead.
+If
 `--max-paths` is any other integer, the bounded DFS ordering is used.
 
 Brute-force green-path enumeration is streamed: each candidate path is checked
@@ -132,19 +133,14 @@ sets `resource_limited: true`.
 `--reduction-round -1` is the default. It repeatedly applies valid
 mid-simplification witnesses. Use `--reduction-round K` to cap the number of
 applied mid-simplification rounds. Final JSON/text PD codes and
-`--show-step-pd` output are canonicalized. In default heuristic mode, the
-internal PD order is kept in the prototype-compatible form while heuristic
-witnesses keep succeeding. When heuristic search misses and the program hands
-the current diagram to RIII prepass, non-monotone failover, brute force, or the
-final RIII failover, the current PD code is canonicalized first.
-
-Each default round tries the legacy heuristic search first. If it succeeds, the
-next round returns to heuristic search. If it misses, the executable uses a
-deterministic adaptive scheduler for `r3_prepass` and `non_monotone`.
-When `--timeout K` is positive and the input did not start with at least 500
-crossings, the heuristic stage uses a 20 second soft slice before this adaptive
-handoff. Large initial inputs keep the multi-worker best-batch heuristic search
-without that stage slice.
+`--show-step-pd` output are canonicalized. The default route starts with an
+efficient 180 second adaptive phase. Its initial scheduler order is
+`r3_prepass`, then legacy first-hit heuristic search, then `non_monotone`; stage
+scores adapt after successes, misses, and soft timeouts. If the efficient phase
+expires, the current best PD code is canonicalized and the remaining search
+uses the multi-worker best-batch heuristic route. In that hard-case route,
+heuristic witnesses keep the prototype-compatible internal order until the next
+non-heuristic handoff.
 Productive helper stages gain priority; misses and soft stage timeouts lower
 priority. If a helper stage reduces the diagram, the result is applied and the
 next round starts again from heuristic mode. If all helper stages miss, the

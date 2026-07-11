@@ -29,22 +29,18 @@ python mid_simplify_v5.py --pd-code "PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]"
 Use `--json` for structured output containing `final_pd_code` and
 `final_crossings`. Use `--reduction-round K` to cap applied
 mid-simplification rounds; the default `-1` runs until stable. In heuristic
-mode, each round first tries the prototype-compatible deterministic heuristic
-route. With one worker this is the legacy first-hit route; with multiple
-workers and an initial input of at least 500 crossings, red paths are searched
-in deterministic batches and the best validated witness in the batch window is
-selected by actual crossing reduction. Jobs that start below 500 crossings keep
-the legacy first-hit route. While heuristic search keeps succeeding, the
-internal PD row and label order is preserved. If heuristic search misses, the
-current PD code is canonicalized at the non-heuristic handoff boundary, then
-`r3_prepass`, `non_monotone`, brute force, and the final RIII failover are
-tried as needed.
+mode, the reducer first runs a 180 second efficient adaptive phase whose
+initial order is `r3_prepass`, legacy first-hit heuristic search, and
+`non_monotone`. If that phase expires, the current best PD code is used as the
+start of a deterministic multi-worker best-batch heuristic selected by actual
+crossing reduction. In that hard-case route, heuristic witnesses keep the
+prototype-compatible internal order until the next non-heuristic handoff.
+When the reducer hands the current diagram to non-heuristic stages, the current
+PD code is canonicalized first, then `r3_prepass`, `non_monotone`, brute force,
+and the final RIII failover are tried as needed.
 Use `--timeout K` to cap each PD-code job at
 `K` seconds; the default `-1` has no timeout. A timed-out job returns the best
 PD code found so far and sets `timed_out` in JSON/text output.
-With a positive timeout, ordinary inputs below the 500-crossing multi-worker
-threshold give each heuristic stage a 20 second soft slice before handing the
-round to adaptive helper stages.
 Use `--quit-at-crossing N` to stop early once the current PD code has at most
 `N` crossings; the default `-1` disables this and output sets
 `stopped_by_crossing_limit` when the threshold is reached. Brute-force

@@ -34,7 +34,7 @@ HEURISTIC_MAX_STATE_BUDGET = 4096
 HEURISTIC_MIN_PATH_BUDGET = 24
 HEURISTIC_MAX_PATH_BUDGET = 384
 HEURISTIC_BEST_LOOKAHEAD_BATCHES = 8
-HEURISTIC_PARALLEL_MIN_CROSSINGS = 500
+EFFICIENT_PHASE_TIME_SLICE_SECONDS = 180
 R3_FAILOVER_MAX_DEPTH = 8
 R3_FAILOVER_MAX_STATES = 4096
 R3_FAILOVER_TIME_SLICE_SECONDS = 30
@@ -2910,10 +2910,7 @@ def find_simplification(
     check_timeout(timeout, deadline)
     red_lines = possible_red_lines(diagram)
     heuristic_mode = max_paths == -1 and not ban_heuristic
-    heuristic_parallel_enabled = (
-        heuristic_mode
-        and (force_heuristic_parallel or len(code) >= HEURISTIC_PARALLEL_MIN_CROSSINGS)
-    )
+    heuristic_parallel_enabled = heuristic_mode and force_heuristic_parallel
     red_path_parallel_candidate = max_paths == -1 and (
         not heuristic_mode or heuristic_parallel_enabled
     )
@@ -2927,7 +2924,6 @@ def find_simplification(
             heuristic_message = (
                 "heuristic_parallel_batches first_hit=no "
                 f"lookahead_batches={HEURISTIC_BEST_LOOKAHEAD_BATCHES} "
-                f"min_crossings={HEURISTIC_PARALLEL_MIN_CROSSINGS} "
                 f"red_paths={len(red_lines)}"
             )
         else:
@@ -4435,9 +4431,47 @@ def reduce_pd_code(
     try:
         check_timeout(timeout, deadline)
         top_level_heuristic_mode = max_paths == -1 and not ban_heuristic
-        large_initial_heuristic_mode = (
-            top_level_heuristic_mode and len(code) >= HEURISTIC_PARALLEL_MIN_CROSSINGS
-        )
+        big_heuristic_mode = False
+        efficient_phase_timed_out = False
+        efficient_phase_deadline = time.monotonic() + EFFICIENT_PHASE_TIME_SLICE_SECONDS
+
+        def efficient_phase_active() -> bool:
+            return top_level_heuristic_mode and not big_heuristic_mode
+
+        def efficient_phase_expired() -> bool:
+            return efficient_phase_active() and time.monotonic() >= efficient_phase_deadline
+
+        def with_efficient_phase_deadline(
+            current_timeout: int,
+            current_deadline: Optional[float],
+        ) -> Tuple[int, Optional[float]]:
+            if not efficient_phase_active():
+                return current_timeout, current_deadline
+            if current_deadline is None or efficient_phase_deadline < current_deadline:
+                return EFFICIENT_PHASE_TIME_SLICE_SECONDS, efficient_phase_deadline
+            return current_timeout, current_deadline
+
+        def switch_to_big_heuristic(stage: str) -> None:
+            nonlocal big_heuristic_mode, efficient_phase_timed_out
+            if not efficient_phase_active():
+                return
+            if len(best_code) < len(output.code):
+                output.code = [tuple(crossing) for crossing in best_code]
+                output.crossingless_components = best_crossingless_components
+            output.code = _canonical_output_code(output.code)
+            big_heuristic_mode = True
+            efficient_phase_timed_out = False
+            _emit_progress(
+                verbose,
+                progress,
+                (
+                    f"{stage} efficient_phase_timeout "
+                    f"seconds={EFFICIENT_PHASE_TIME_SLICE_SECONDS} "
+                    f"handoff=big_heuristic crossings={len(output.code)} "
+                    f"crossingless_components={output.crossingless_components}"
+                ),
+            )
+
         _emit_progress(
             verbose,
             progress,
@@ -4448,7 +4482,8 @@ def reduce_pd_code(
                 f"max_thread={max_thread} bruteforce_budget={bruteforce_budget} "
                 f"timeout={timeout} quit_at_crossing={quit_at_crossing} "
                 f"heuristic={'off' if ban_heuristic else 'on'} "
-                f"heuristic_parallel_initial={'on' if large_initial_heuristic_mode else 'off'} "
+                f"efficient_phase_seconds="
+                f"{EFFICIENT_PHASE_TIME_SLICE_SECONDS if top_level_heuristic_mode else -1} "
                 f"reapr={'on' if reapr else 'off'} "
                 f"reapr_retry_max={reapr_retry_max}"
             ),
@@ -4458,18 +4493,14 @@ def reduce_pd_code(
             known_crossingless_components,
             timeout,
             deadline,
-            allow_reidemeister_ii=not top_level_heuristic_mode,
-            canonicalize_input=not top_level_heuristic_mode,
         )
-        output.code = (
-            [tuple(crossing) for crossing in prepared.code]
-            if top_level_heuristic_mode
-            else _canonical_output_code(prepared.code)
-        )
+        output.code = _canonical_output_code(prepared.code)
         output.crossingless_components = prepared.crossingless_components
         output.reidemeister_i_moves = prepared.reidemeister_i_moves
         output.reidemeister_ii_moves = prepared.reidemeister_ii_moves
         output.nugatory_crossing_moves = prepared.nugatory_crossing_moves
+        best_code = [tuple(crossing) for crossing in output.code]
+        best_crossingless_components = output.crossingless_components
         check_timeout(timeout, deadline)
         _emit_progress(
             verbose,
@@ -4528,6 +4559,8 @@ def reduce_pd_code(
                 output.reidemeister_i_moves += prepared.reidemeister_i_moves
                 output.reidemeister_ii_moves += prepared.reidemeister_ii_moves
                 output.nugatory_crossing_moves += prepared.nugatory_crossing_moves
+                best_code = [tuple(crossing) for crossing in output.code]
+                best_crossingless_components = output.crossingless_components
                 stop_if_quit_at_crossing("reapr_oracle")
             _emit_progress(
                 verbose,
@@ -4556,9 +4589,11 @@ def reduce_pd_code(
             adaptive_mode = max_paths == -1 and not ban_heuristic
             search = SimplificationResult()
             restart_round = False
+            if efficient_phase_expired():
+                switch_to_big_heuristic(f"round {round_index}")
 
             def run_r3_prepass() -> bool:
-                nonlocal restart_round
+                nonlocal restart_round, best_code, best_crossingless_components
                 _emit_progress(
                     verbose,
                     progress,
@@ -4634,6 +4669,9 @@ def reduce_pd_code(
                     output.reidemeister_ii_moves += r3_prepass.reidemeister_ii_moves
                     output.reidemeister_iii_moves += r3_prepass.reidemeister_iii_moves
                     output.nugatory_crossing_moves += r3_prepass.nugatory_crossing_moves
+                    if len(output.code) < len(best_code):
+                        best_code = [tuple(crossing) for crossing in output.code]
+                        best_crossingless_components = output.crossingless_components
                     if stop_if_quit_at_crossing("r3_prepass"):
                         restart_round = True
                         return True
@@ -4643,7 +4681,7 @@ def reduce_pd_code(
                 return False
 
             def run_heuristic_search(use_soft_slice: bool) -> bool:
-                nonlocal search
+                nonlocal search, efficient_phase_timed_out
                 output.last_path_search_mode = _search_mode(max_paths, ban_heuristic)
                 _emit_progress(
                     verbose,
@@ -4652,6 +4690,7 @@ def reduce_pd_code(
                         f"round {round_index} search_start crossings={len(output.code)} "
                         f"mode={output.last_path_search_mode} "
                         f"max_thread={max_thread} "
+                        f"big_heuristic={'yes' if big_heuristic_mode else 'no'} "
                         f"soft_slice={MID_SEARCH_TIME_SLICE_SECONDS if use_soft_slice else -1}"
                     ),
                 )
@@ -4665,6 +4704,10 @@ def reduce_pd_code(
                             deadline,
                             MID_SEARCH_TIME_SLICE_SECONDS,
                         )
+                    stage_timeout_value, stage_deadline = with_efficient_phase_deadline(
+                        stage_timeout_value,
+                        stage_deadline,
+                    )
                     search = find_simplification(
                         output.code,
                         max_paths=max_paths,
@@ -4676,23 +4719,37 @@ def reduce_pd_code(
                         progress=progress,
                         timeout=stage_timeout_value,
                         _timeout_deadline=stage_deadline,
-                        force_heuristic_parallel=large_initial_heuristic_mode,
+                        force_heuristic_parallel=big_heuristic_mode,
                     )
                 except PdCodeSimplifyTimeoutError:
-                    if not use_soft_slice or timeout_expired(deadline):
+                    if efficient_phase_expired() and not timeout_expired(deadline):
+                        efficient_phase_timed_out = True
+                        search = SimplificationResult(
+                            path_search_mode=_search_mode(max_paths, ban_heuristic)
+                        )
+                        _emit_progress(
+                            verbose,
+                            progress,
+                            (
+                                f"round {round_index} efficient_phase_search_timeout "
+                                f"seconds={EFFICIENT_PHASE_TIME_SLICE_SECONDS}"
+                            ),
+                        )
+                    elif not use_soft_slice or timeout_expired(deadline):
                         raise
-                    stage_timeout = True
-                    search = SimplificationResult(
-                        path_search_mode=_search_mode(max_paths, ban_heuristic)
-                    )
-                    _emit_progress(
-                        verbose,
-                        progress,
-                        (
-                            f"round {round_index} search_timeout "
-                            f"seconds={MID_SEARCH_TIME_SLICE_SECONDS}"
-                        ),
-                    )
+                    else:
+                        stage_timeout = True
+                        search = SimplificationResult(
+                            path_search_mode=_search_mode(max_paths, ban_heuristic)
+                        )
+                        _emit_progress(
+                            verbose,
+                            progress,
+                            (
+                                f"round {round_index} search_timeout "
+                                f"seconds={MID_SEARCH_TIME_SLICE_SECONDS}"
+                            ),
+                        )
                 output.tested_red_paths += search.tested_red_paths
                 output.tested_green_paths += search.tested_green_paths
                 output.last_path_search_mode = search.path_search_mode
@@ -4718,7 +4775,7 @@ def reduce_pd_code(
                 return search.found
 
             def run_non_monotone() -> bool:
-                nonlocal restart_round
+                nonlocal restart_round, best_code, best_crossingless_components
                 _emit_progress(
                     verbose,
                     progress,
@@ -4811,6 +4868,9 @@ def reduce_pd_code(
                         output.reidemeister_ii_moves += step.reidemeister_ii_moves
                         output.reidemeister_iii_moves += step.reidemeister_iii_moves
                         output.nugatory_crossing_moves += step.nugatory_crossing_moves
+                        if len(output.code) < len(best_code):
+                            best_code = [tuple(crossing) for crossing in output.code]
+                            best_crossingless_components = output.crossingless_components
                         _emit_step_pd(
                             show_step_pd,
                             step_pd_output,
@@ -4841,16 +4901,31 @@ def reduce_pd_code(
                 return False
 
             if adaptive_mode:
-                use_heuristic_soft_slice = (
-                    timeout > 0 and not large_initial_heuristic_mode
-                )
-                if not run_heuristic_search(use_heuristic_soft_slice):
-                    output.code = _canonical_output_code(output.code)
-                    _emit_progress(
-                        verbose,
-                        progress,
-                        "non_heuristic_handoff canonicalized=yes",
-                    )
+                if big_heuristic_mode:
+                    use_heuristic_soft_slice = False
+                    if not run_heuristic_search(use_heuristic_soft_slice):
+                        output.code = _canonical_output_code(output.code)
+                        _emit_progress(
+                            verbose,
+                            progress,
+                            "non_heuristic_handoff canonicalized=yes",
+                        )
+                        stage_order = _adaptive_stage_order(adaptive_scheduler)
+                        _emit_progress(
+                            verbose,
+                            progress,
+                            _adaptive_scheduler_log(round_index, adaptive_scheduler, stage_order),
+                        )
+                        for stage in stage_order:
+                            if stage == "heuristic_search":
+                                continue
+                            if stage == "r3_prepass":
+                                if run_r3_prepass():
+                                    break
+                            else:
+                                if run_non_monotone():
+                                    break
+                else:
                     stage_order = _adaptive_stage_order(adaptive_scheduler)
                     _emit_progress(
                         verbose,
@@ -4858,10 +4933,16 @@ def reduce_pd_code(
                         _adaptive_scheduler_log(round_index, adaptive_scheduler, stage_order),
                     )
                     for stage in stage_order:
-                        if stage == "heuristic_search":
-                            continue
                         if stage == "r3_prepass":
                             if run_r3_prepass():
+                                break
+                        elif stage == "heuristic_search":
+                            use_heuristic_soft_slice = False
+                            if run_heuristic_search(use_heuristic_soft_slice):
+                                break
+                            if efficient_phase_timed_out:
+                                switch_to_big_heuristic(f"round {round_index}")
+                                restart_round = True
                                 break
                         else:
                             if run_non_monotone():
@@ -4967,6 +5048,9 @@ def reduce_pd_code(
                     output.reidemeister_ii_moves += r3.reidemeister_ii_moves
                     output.reidemeister_iii_moves += r3.reidemeister_iii_moves
                     output.nugatory_crossing_moves += r3.nugatory_crossing_moves
+                    if len(output.code) < len(best_code):
+                        best_code = [tuple(crossing) for crossing in output.code]
+                        best_crossingless_components = output.crossingless_components
                     if stop_if_quit_at_crossing("r3_failover"):
                         break
                     continue
@@ -4986,10 +5070,11 @@ def reduce_pd_code(
                 output.crossingless_components,
             )
             heuristic_witness = search.path_search_mode == "heuristic"
+            preserve_heuristic_order = heuristic_witness and big_heuristic_mode
             step_code = _canonical_output_code(reduced_code)
             reduced_code = (
                 [tuple(crossing) for crossing in reduced_code]
-                if heuristic_witness
+                if preserve_heuristic_order
                 else step_code
             )
             output.mid_simplification_rounds += 1
@@ -5002,18 +5087,21 @@ def reduce_pd_code(
                 output.crossingless_components,
                 timeout,
                 deadline,
-                allow_reidemeister_ii=not heuristic_witness,
-                canonicalize_input=not heuristic_witness,
+                allow_reidemeister_ii=not preserve_heuristic_order,
+                canonicalize_input=not preserve_heuristic_order,
             )
             output.code = (
                 [tuple(crossing) for crossing in prepared.code]
-                if heuristic_witness
+                if preserve_heuristic_order
                 else _canonical_output_code(prepared.code)
             )
             output.crossingless_components = prepared.crossingless_components
             output.reidemeister_i_moves += prepared.reidemeister_i_moves
             output.reidemeister_ii_moves += prepared.reidemeister_ii_moves
             output.nugatory_crossing_moves += prepared.nugatory_crossing_moves
+            if len(output.code) < len(best_code):
+                best_code = [tuple(crossing) for crossing in output.code]
+                best_crossingless_components = output.crossingless_components
             check_timeout(timeout, deadline)
             _emit_progress(
                 verbose,
@@ -5030,6 +5118,9 @@ def reduce_pd_code(
             stop_if_quit_at_crossing("mid_simplification")
     except PdCodeSimplifyTimeoutError as exc:
         output.timed_out = True
+        if "best_code" in locals() and len(best_code) < len(output.code):
+            output.code = [tuple(crossing) for crossing in best_code]
+            output.crossingless_components = best_crossingless_components
         _emit_progress(
             verbose,
             progress,

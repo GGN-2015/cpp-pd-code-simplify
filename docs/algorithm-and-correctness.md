@@ -4,6 +4,107 @@ This document describes the core ideas used by `cpp-pd-code-simplify`.
 The implementation is a standalone C++ translation of the mathematical
 algorithmic structure, not a wrapper around a Python or graph library.
 
+## Scope And Guarantees
+
+The default reducer is a certified local-move reducer in the following
+implementation sense: every accepted simplification is either a directly
+recognized local Reidemeister/nugatory deletion, a validated red-green disk
+witness, or a deterministic sequence of RIII moves followed by those same
+local deletions. The program does not claim that the returned diagram has the
+minimum possible crossing number. It only claims that the moves it actually
+applies are valid under the checks described here.
+
+`--reapr` is different. It enables an experimental deterministic projection
+oracle with an invariant guard. That guard is useful for hard examples, but it
+is not an equivalence proof. The option is disabled by default, and accepted
+results carry an explicit warning in JSON output.
+
+All command-line and Python entry points use the same high-level algorithm.
+The Python C++ interface calls the C++ backend. The pure Python prototype
+implements the same move ordering, guards, and deterministic retry sequences so
+that differential tests can compare output exactly.
+
+## Terminology
+
+This manual uses the following terms. Standard knot-theory terms are listed in
+[References](#references); engineering terms are defined here because they are
+project-specific.
+
+- **PD code**: a planar diagram code written as a list of crossing quadruples
+  such as `PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]`. Each integer label names one
+  diagram edge and must occur exactly twice. The empty PD code `PD[]`
+  represents a diagram with no crossing-bearing components; crossingless
+  components are tracked separately.
+- **Endpoint**: an internal half-edge address `(crossing_index, strand_index)`.
+  The strand index is in `{0,1,2,3}` around one crossing.
+- **Component**: a link component recovered by walking through crossings with
+  the oriented successor operation `next`. A component can have crossings or be
+  crossingless.
+- **Crossingless component count**: an explicit integer carried next to the PD
+  code because a plain PD string cannot store a component that has no crossings.
+- **Face**: a connected complementary region of the planar diagram. The
+  unbounded exterior region is one of these faces.
+- **Dual graph**: the graph with one vertex per face and one edge for each
+  diagram edge separating two faces.
+- **Red path**: the diagram arc that the mid-simplification algorithm proposes
+  to delete. It is a sequence of endpoints along an oriented component.
+- **Green path**: the replacement arc searched in the dual graph. It runs
+  through faces and crosses diagram edges.
+- **Witness**: a red path, a green path, a side choice, and over/under data
+  that together pass the disk-consistency validator and can be applied to make
+  a new PD code.
+- **Preprocessing**: the repeated local deletion pass that removes R1 moves,
+  true R2 bigons, and nugatory crossings before and after larger moves.
+- **Canonical output**: the display-only PD form where labels start at `1`,
+  components are walked deterministically, crossing rows are sorted, and each
+  row starts at the under-incoming strand.
+- **Efficient phase**: the first 180 seconds of default heuristic mode. It uses
+  the fast adaptive route whose initial stage order is RIII prepass, legacy
+  first-hit red-green search, then non-monotone failover.
+- **Big heuristic route**: the hard-case route entered only after the efficient
+  phase expires. It uses deterministic multi-worker red-path batches and
+  chooses the validated witness with the best measured crossing reduction
+  inside a fixed lookahead window.
+- **Failover**: a deterministic helper stage that is tried when the direct
+  current route cannot reduce the diagram. Failovers are not random restarts.
+- **Resource-limited result**: a result returned because a configured search
+  budget was exhausted. It is a safe partial result, not a proof that no move
+  exists.
+
+## Full Reduction Pipeline
+
+For one input PD code, the high-level reducer runs the following pipeline.
+
+1. Parse and validate the PD labels. Each label must appear exactly twice.
+   Face and component structure are reconstructed on demand by the stages that
+   need them. Internally rebuilt PD codes produced by witness application are
+   additionally checked by the planar Euler guard described below.
+2. Run preprocessing to a fixed point: R1 deletion, true R2-bigon deletion, and
+   nugatory crossing deletion. Update crossingless-component accounting after
+   every deletion that removes a component's last crossing.
+3. If `--reapr` is enabled, try the experimental projection oracle. A candidate
+   is accepted only if the invariant profile matches. Accepted candidates are
+   cleaned by the same preprocessing pass and then re-enter the normal loop.
+4. Enter the iterative reduction loop. With `--reduction-round -1`, the loop
+   continues until every enabled stage fails, times out, or hits a resource
+   guard. With `--reduction-round K`, at most `K` mid-simplification witnesses
+   or replayed non-monotone steps are applied.
+5. In default heuristic mode, use the efficient adaptive route for 180 seconds.
+   The initial order is RIII prepass, legacy first-hit red-green search, and
+   non-monotone failover. Stage priorities adapt after successes, misses, and
+   soft timeouts.
+6. If the efficient phase expires, canonicalize the best PD code seen so far
+   and continue with the big heuristic route. That route prefers witnesses that
+   remove more crossings while keeping deterministic red-path order.
+7. If adaptive stages fail to reduce the diagram, run streaming brute-force
+   green-path enumeration from the canonical handoff state. If the brute-force
+   budget is exhausted, return the best known PD code with `resource_limited`.
+8. If brute force also fails, run the final deterministic RIII failover. If it
+   exposes a local deletion, apply it and restart the loop. Otherwise the
+   diagram is reported as stable for the configured search.
+9. Before JSON/text output, canonicalize the displayed PD code. This final
+   formatting is a relabeling, not a topological move.
+
 ## Diagram Model
 
 A planar diagram code is represented as a list of crossings
@@ -16,6 +117,14 @@ where every label occurs exactly twice. Equal labels identify the two ends
 of the same diagram edge. Internally, an endpoint is stored as
 `(crossing_index, strand_index)`.
 
+The implementation works with the cyclic order of the four entries at each
+crossing. After canonical formatting, entry `0` is the under-incoming edge,
+entry `1` is an over edge, entry `2` is the under-outgoing edge, and entry `3`
+is the other over edge. During the internal search the row order may be less
+pretty, so the `Diagram` constructor computes rotations and crossing signs
+before any traversal is used. This is why the final output can be made elegant
+without changing the search state too early.
+
 The implementation reconstructs the same local operations used by crossing
 entry based link libraries:
 
@@ -26,6 +135,8 @@ entry based link libraries:
 The code first orients all crossings consistently with the PD component
 orientation convention. This gives each crossing a sign and determines the
 two crossing entries used by component traversal and red path generation.
+The same orientation data is reused by Alexander-root checks and by final
+crossing rotation.
 
 ## Face Dual Graph
 
@@ -34,10 +145,26 @@ faces by repeatedly applying `next_corner`. Each face becomes a vertex in a
 dual graph. Each diagram edge separates two faces, so it becomes an edge in
 the dual graph.
 
+The exterior unbounded region is not special-cased away. It is reached by the
+same `next_corner` face traversal and therefore becomes a normal dual-graph
+vertex. This matters for examples where the simplifying green arc runs through
+the outside of the drawing.
+
 For each dual edge, the implementation stores the two endpoint interfaces
 that it crosses. This is important later: a candidate green path is a path
 in the dual graph, but the over/under consistency test must know exactly
 which diagram strand each dual edge crosses.
+
+The planarity sanity check compares vertices, edges, faces, and crossing-graph
+components through the Euler relation
+
+```text
+crossings - diagram_edges + faces = 2 * crossing_graph_components.
+```
+
+Here `diagram_edges = 2 * crossings` for a valid four-valent PD diagram. This
+check is not a layout algorithm; when the guard is called, it catches malformed
+PD structures and bad internal rewrites.
 
 ## PD Preprocessing
 
@@ -51,6 +178,21 @@ implementation does this in C++; the Python prototype implements the same
 preprocessing in Python. Both versions update the explicit
 crossingless-component count when deleted crossings were the last crossings of
 a component.
+
+The preprocessing loop is intentionally local and deterministic:
+
+- an R1 move is a one-crossing loop where a PD edge returns to the same
+  crossing in the local pattern recognized by the implementation;
+- a true R2 bigon is a pair of crossings connected by the two opposite sides of
+  a disk-shaped bigon, with compatible strand parity;
+- a nugatory crossing is a crossing whose removal separates the crossing graph,
+  so it is a one-crossing connected-sum artifact rather than a two-crossing
+  bigon.
+
+After each successful deletion, the PD labels are renumbered by the local
+renumbering routine selected for that deletion. The loop then starts over so
+newly exposed local moves are not missed. The final user-facing result is
+canonicalized separately.
 
 The lower-level `find_simplification` function still searches exactly the PD
 code it receives. This keeps the mid-simplification search independently
@@ -88,6 +230,10 @@ crossing except the closing crossing.
 Every prefix long enough to bound a nontrivial disk is considered a red
 candidate. For a red path with `n` endpoints, the algorithm searches for a
 shorter green path between the faces adjacent to the red path endpoints.
+The intended crossing reduction is the difference between the number of
+crossings removed from the red arc and the number of new crossings inserted
+along the green arc. A candidate is useful only when the applied and cleaned PD
+code has fewer crossings than the starting PD code.
 
 Interior red edges are assigned a large dual-graph weight. This prevents a
 green path from simply crossing the red boundary through its interior. The
@@ -110,6 +256,23 @@ in one large path list. This is still exact when the brute-force budget is not
 exhausted, and it prunes branches whose current weight plus the shortest
 possible remaining dual-graph distance is already too large to beat the red
 path.
+
+The three path-search modes differ only in candidate ordering and candidate
+coverage:
+
+- **bounded** (`max_paths` finite): examine at most the configured number of
+  simple green paths for each red path.
+- **heuristic** (`max_paths=-1`, no `--ban-heuristic`): use deterministic
+  beam/priority sampling to focus on shorter and more promising dual paths. In
+  the big heuristic route, red paths are batched across workers and validated
+  witnesses are ranked by actual crossing reduction.
+- **bruteforce** (`max_paths=-1 --ban-heuristic`): stream all eligible simple
+  green paths unless `bruteforce_budget` or a global timeout stops the job.
+
+Only brute-force mode without resource exhaustion is complete for the current
+red-green disk model. Bounded and heuristic modes are acceleration strategies:
+they can miss a witness, but any witness they return still passes the same
+validator and application checks.
 
 ## Green Path Validation
 
@@ -138,6 +301,11 @@ before hitting the red boundary or green path, the candidate is rejected. Such
 a repeated state is a closed propagation orbit, and rejecting it keeps the
 validator finite without accepting an uncertified witness.
 
+The validator deliberately tries both sides of the red arc. The same red path
+can bound a disk on its left or on its right, and the valid side depends on the
+current embedding. The returned witness records the successful side so the
+application step can rebuild the PD code with the same over/under choices.
+
 ## Applying A Witness
 
 The high-level simplifier does not stop at the witness. It applies the
@@ -151,36 +319,51 @@ witness to produce a new PD code:
 - the resulting half-edge pairing is checked so every active PD label has
   exactly two ends, then labels are renumbered deterministically.
 
-After applying one witness, the implementation immediately runs the same R1,
+The application code performs several rejection checks before accepting the new
+PD code:
+
+- the red path must not repeat a removed crossing;
+- the green path must not cross a half-edge removed with the red arc;
+- the green path must not split the same old PD label twice;
+- every active half-edge equivalence class after rewiring must contain exactly
+  two endpoints;
+- the rebuilt PD code must pass the planarity sanity check.
+
+These checks are the reason the implementation can apply a witness rather than
+only reporting that one exists.
+
+After applying one ordinary witness, the implementation immediately runs R1,
 R2, and nugatory preprocessing again. This can expose additional local
-simplifications before the next mid-simplification search round.
+simplifications before the next mid-simplification search round. In the
+hard-case best-batch route described below, heuristic witnesses deliberately
+keep the prototype-compatible internal order and use order-preserving cleanup
+until the next non-heuristic handoff. In this context, order-preserving cleanup
+means R1 and nugatory deletion without immediate R2 deletion or canonical row
+reordering. That exception avoids hiding large delayed witnesses by premature
+canonicalization or R2 cleanup.
 
 `--reduction-round K` caps the number of applied mid-simplification rounds.
 Final JSON/text output and `--show-step-pd` output are always canonicalized.
 This canonicalization relabels each component from 1, sorts crossings, and
 rotates each crossing so the displayed row starts at the under-incoming strand.
-It is not a topological move. In default heuristic mode, however, the internal
-state intentionally keeps the original prototype-compatible row and label order
-while heuristic witnesses keep succeeding. This preserves hard-case routes
-where a large crossing drop appears only after many earlier heuristic rounds.
+It is not a topological move.
 
 The default `--reduction-round -1` repeats until no applicable witness remains.
-In default heuristic mode, each round first tries the deterministic heuristic
-red-green search. With one worker this is the original legacy first-hit route.
-With multiple workers and an initial input of at least 500 crossings, red paths
-are searched in deterministic batches and the best validated witness in the
-batch window is selected by actual crossing reduction. Jobs that start below
-that threshold keep the legacy first-hit route to preserve the timing profile
-of ordinary inputs. If heuristic search lowers the crossing count, the next
-round immediately returns to heuristic search with the same prototype-compatible
-internal order.
-For ordinary jobs with a positive global timeout, heuristic search uses a
-20 second soft slice before the non-heuristic handoff. The soft slice is not
-used for jobs that start at or above the 500-crossing multi-worker threshold,
-so large hard-case routes can keep their deterministic best-batch search.
-If heuristic search misses, the implementation canonicalizes the current PD code
-at the non-heuristic handoff boundary, then uses a deterministic scheduler over
-the small RIII prepass and deterministic non-monotone failover described below.
+In default heuristic mode, the reducer first gives the fast adaptive route an
+efficient 180 second phase. That route uses the deterministic scheduler below;
+its initial order is RIII prepass, then legacy first-hit heuristic search, then
+non-monotone failover. This preserves the old timing profile for ordinary
+zip-random inputs where local RIII/preprocessing cascades are enough. If the
+efficient phase expires before the job finishes, the current best PD code is
+canonicalized and the remaining reduction switches to a deterministic
+multi-worker best-batch heuristic: red paths are searched in deterministic
+batches and the best validated witness in the batch window is selected by
+actual crossing reduction. If the active stage lowers the crossing count, the
+next loop immediately returns to the active route.
+When heuristic search misses, the implementation canonicalizes the current PD
+code at the non-heuristic handoff boundary, then continues with the small RIII
+prepass, deterministic non-monotone failover, brute force, and final RIII
+failover described below.
 
 Each helper strategy has fixed base priority, then gains priority after
 successes and loses priority after misses or soft stage timeouts. This prevents
@@ -189,6 +372,22 @@ while allowing a productive helper to run earlier after heuristic search has
 missed. The RIII prepass has a 15 second soft slice, and non-monotone failover
 has a 60 second soft slice. A soft slice only changes that stage's scheduler
 score; the global `--timeout` remains the hard job timeout.
+
+The adaptive scheduler is deterministic. The base priorities are:
+
+```text
+r3_prepass:       300
+heuristic_search: 240
+non_monotone:     120
+```
+
+For each stage, the runtime score is the base score plus rewards for successes
+and consecutive successes, minus penalties for misses, consecutive misses,
+timeouts, and consecutive timeouts. Ties are broken by the fixed base order.
+The purpose is not to predict topology; it is to avoid repeatedly spending time
+on a stage that has just failed while still letting a productive stage run
+early. Verbose mode prints the current order, score, success count, miss count,
+timeout count, and streak counters.
 
 If a helper stage lowers the crossing count, its result is canonicalized and
 the next round starts again in heuristic mode. If all helper stages miss, the
@@ -204,6 +403,15 @@ exhausted, the simplifier stops the current job, returns the best PD code known
 so far, and sets `resource_limited`. This is a safety result rather than a
 stability proof: it means the implementation deliberately stopped before
 finishing the brute-force proof attempt.
+
+Timeouts and interrupts are handled at stage boundaries and inside expensive
+loops. A positive `--timeout K` is a per-PD-code wall-clock limit. When it
+fires, the job returns the best crossing count reached so far and sets
+`timed_out`. `Ctrl+C` uses the same cancellation checks but exits the process
+with the interrupt status instead of returning a successful JSON result. The
+option `--quit-at-crossing N` is different from timeout: it is a requested early
+success condition. As soon as the current PD code has at most `N` crossings,
+the reducer returns immediately and sets `stopped_by_crossing_limit`.
 
 ## Deterministic Non-Monotone Failover
 
@@ -298,6 +506,17 @@ the Python prototype. The determinant code is isolated in the C++ namespace
 `reapr_invariant_guard`. The Python prototype uses the same matrix
 construction, the same finite-field primes, and the same acceptance order.
 
+The word "oracle" here means "an optional proposal generator whose candidate is
+screened by invariants." It does not mean a mathematically complete decision
+procedure. The proposal generator is deterministic:
+
+- attempt `0` proposes a very small template when the determinant fingerprint
+  admits one;
+- later attempts derive a SplitMix64 seed from the attempt number, determinant
+  value, and current crossing count;
+- that seed generates a fixed closed-braid candidate pool;
+- C++ and Python use the same seed formula and the same candidate ordering.
+
 For a one-component input, the oracle tries a deterministic projection
 candidate only when it can make the crossing count smaller. There is no
 crossing-drop window: an extremely small projection can be accepted if it
@@ -321,17 +540,38 @@ rest of the project. It is accepted only if the following profile matches the
 original diagram exactly:
 
 - total component count, including crossingless components;
-- Alexander determinant fingerprint;
+- Alexander determinant fingerprint over the primes `1000003`, `1000033`, and
+  `1000037`;
 - nonzero Alexander roots over `F_11`, `F_19`, and `F_31`.
 
-For efficiency, the implementation first checks component count,
+For efficiency, the implementation first checks component count and the
 determinant fingerprint. The three finite-field root sets are computed only
-after those faster checks match. If more than one candidate
-matches, the oracle chooses the candidate whose cleaned crossing count is
-closest to the current crossing count, with deterministic PD-code text as the
-tie-breaker. Accepted results then run through the ordinary R1/R2/nugatory
-cleanup and continue into the normal reduction loop, starting again from the
-heuristic witness search when heuristics are enabled.
+after those faster checks match. No Goeritz-signature guard is used. If more
+than one candidate
+matches, the oracle chooses the least aggressive successful candidate: the one
+whose cleaned crossing count is largest while still below the current count.
+Deterministic PD-code text is the tie-breaker. Accepted results then run
+through the ordinary R1/R2/nugatory cleanup and continue into the normal
+reduction loop.
+
+The determinant fingerprint is computed from a Fox-coloring-style matrix at
+`t=-1`: after canonicalizing the PD code, over-strand labels are identified,
+each crossing contributes the row `2*over - under_in - under_out`, one minor is
+deleted, and the determinant is computed modulo the three large primes. The
+stored residue is normalized up to sign by taking `min(r, p-r)`.
+
+The Alexander root profile uses the oriented crossing sign. For each
+nonzero `t` in `F_p`, the implementation builds the Alexander matrix row
+
+```text
+positive crossing: (1-t)*over + t*under_in - under_out
+negative crossing: (1-t)*over - under_in + t*under_out
+```
+
+then tests whether the same fixed minor has determinant zero modulo `p`. The
+profile records the sorted list of nonzero roots for `p = 11, 19, 31`.
+This is intentionally cheaper than computing a full symbolic Alexander
+polynomial, but it is also weaker.
 
 This guard is stronger than the original determinant-only screen, but it is
 still not a proof that two knots or links are equivalent. The output therefore
@@ -445,3 +685,26 @@ and any nugatory crossings it exposes.
 These tests do not prove minimality for arbitrary input. They do verify that
 the implementation can survive nontrivial random diagram growth while
 preserving component counts and removing the artificial crossings it created.
+
+## References
+
+The implementation is not a new mathematical algorithm; it is an engineering
+port and extension around the prototype credited in the README. The following
+references are useful background for terminology used in this manual:
+
+- K. Reidemeister, "Elementare Begruendung der Knotentheorie", *Abhandlungen aus
+  dem Mathematischen Seminar der Universitaet Hamburg* 5, 24-32, 1927. This is
+  the classical source for the local diagram moves now called Reidemeister
+  moves.
+- J. W. Alexander, "Topological invariants of knots and links", *Transactions
+  of the American Mathematical Society* 30(2), 275-306, 1928. This is the
+  original source of the Alexander polynomial used by the optional invariant
+  guard.
+- L. H. Kauffman, *Knots and Physics*, World Scientific, 1991. A standard
+  reference for diagrammatic knot manipulations and polynomial invariants.
+- P. R. Cromwell, *Knots and Links*, Cambridge University Press, 2004. A
+  standard text for knot diagrams, Reidemeister moves, and link invariants.
+- D. Bar-Natan and S. Morrison, The Knot Atlas,
+  [Planar Diagrams](https://katlas.org/wiki/Planar_Diagrams). This documents
+  the `PD[X[...], ...]` style notation commonly used by software around knot
+  tables.

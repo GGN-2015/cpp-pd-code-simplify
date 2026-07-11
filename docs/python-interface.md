@@ -88,9 +88,11 @@ and the final RIII failover are tried as needed. Pass
 `verbose=True` to forward timestamped C++ progress logs to stderr. If a call
 exceeds its timeout, the returned dictionary still contains the best PD code
 found so far and sets `timed_out` to `True`.
-With a positive timeout, ordinary inputs below the 500-crossing multi-worker
-threshold give each heuristic stage a 20 second soft slice before the backend
-hands the round to adaptive helper stages.
+In default heuristic mode, the backend first runs a 180 second efficient
+adaptive phase whose initial order is RIII prepass, legacy first-hit heuristic
+search, and non-monotone failover. If that phase expires before the job
+finishes, the current best PD code is used as the start of the deterministic
+multi-worker best-batch heuristic route.
 Pass `quit_at_crossing=N`, or CLI flag `--quit-at-crossing N`, to stop once
 the current PD code has at most `N` crossings. The default `-1` disables this;
 the returned dictionary sets `stopped_by_crossing_limit` when the threshold is
